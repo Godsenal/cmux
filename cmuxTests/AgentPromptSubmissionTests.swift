@@ -801,6 +801,70 @@ struct AgentPromptSubmissionTests {
     }
 
     @MainActor
+    @Test func identityGapReturnsRetryableScopeErrorWithoutTerminalWrite() throws {
+        let previousAppDelegate = AppDelegate.shared
+        let appDelegate = previousAppDelegate ?? AppDelegate()
+        let previousTabManager = appDelegate.tabManager
+        let tabManager = TabManager(autoWelcomeIfNeeded: false)
+        AppDelegate.shared = appDelegate
+        appDelegate.tabManager = tabManager
+        var workspaceForCleanup: Workspace?
+        var panelForCleanup: TerminalPanel?
+        defer {
+            panelForCleanup?.surface.releaseSurfaceForTesting()
+            if let workspace = workspaceForCleanup,
+               tabManager.tabs.contains(where: { $0.id == workspace.id }) {
+                tabManager.closeWorkspace(workspace)
+            }
+            appDelegate.tabManager = previousTabManager
+            AppDelegate.shared = previousAppDelegate
+        }
+
+        let workspace = tabManager.addWorkspace(select: true)
+        workspaceForCleanup = workspace
+        let panelID = try #require(workspace.focusedPanelId)
+        let panel = try #require(
+            workspace.terminalInputTarget(forPanelID: panelID)?.panel
+        )
+        panelForCleanup = panel
+        let agentKey = "codex.socket-identity-gap"
+
+        workspace.recordAgentPID(
+            key: agentKey,
+            pid: getpid(),
+            panelId: panelID,
+            refreshPorts: false
+        )
+        #expect(workspace.agentPromptInputScope(forPanelId: panelID) != nil)
+        workspace.recordAgentPID(
+            key: agentKey,
+            pid: pid_t.max - 1,
+            panelId: panelID,
+            refreshPorts: false
+        )
+        #expect(workspace.agentPromptInputScope(forPanelId: panelID) == nil)
+
+        panel.surface.releaseSurfaceForTesting()
+        let result = TerminalController.shared.v2WorkspaceAgentSubmit(params: [
+            "workspace_id": workspace.id.uuidString,
+            "surface_id": panelID.uuidString,
+            "text": "must wait for a stable agent identity",
+        ])
+
+        guard case .err(let code, _, let rawData) = result else {
+            Issue.record("Expected agent_scope_unavailable")
+            return
+        }
+        let data = try #require(rawData as? [String: Any])
+        #expect(code == "agent_scope_unavailable")
+        #expect(data["workspace_id"] as? String == workspace.id.uuidString)
+        #expect(data["surface_id"] as? String == panelID.uuidString)
+        #expect(data["retryable"] as? Bool == true)
+        #expect(data["retry_after"] as? String == "agent_terminal_ready")
+        #expect(panel.surface.pendingSocketInputSnapshotForTests.items == 0)
+    }
+
+    @MainActor
     @Test func whitespaceOnlyPromptIsRejectedWithoutDelivery() throws {
         let previousAppDelegate = AppDelegate.shared
         let appDelegate = previousAppDelegate ?? AppDelegate()
