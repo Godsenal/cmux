@@ -50,7 +50,6 @@ fi
 # redirects without exposing them to the xcodebuild driver.
 app_host_test_runner_environment=("TEST_RUNNER_CMUX_TEST_PROCESS=1")
 app_host_home=""
-app_host_published_home=""
 app_host_key=""
 app_host_receipt_dir=""
 app_host_home_input="${CMUX_APP_HOST_HOME:-}"
@@ -74,7 +73,6 @@ fi
 if [ -n "$app_host_home_input" ]; then
   cmux_validate_published_app_host_identity || exit 1
   app_host_home="$CMUX_RESOLVED_APP_HOST_HOME"
-  app_host_published_home="$CMUX_RESOLVED_APP_HOST_HOME_INPUT"
   app_host_xdg_config_home="$CMUX_RESOLVED_APP_HOST_XDG_CONFIG_HOME"
   app_host_key="$CMUX_RESOLVED_APP_HOST_KEY"
   app_host_receipt_dir="$CMUX_RESOLVED_APP_HOST_RECEIPT_DIR"
@@ -122,9 +120,12 @@ validate_app_host_config_paths() {
     return 1
   fi
 
-  local expected_config_path published_expected_config_path
-  expected_config_path="${app_host_home%/}/Library/Application Support/com.mitchellh.ghostty/config.ghostty"
-  published_expected_config_path="${app_host_published_home%/}/Library/Application Support/com.mitchellh.ghostty/config.ghostty"
+  # macOS resolves the published /tmp scope through /private/tmp, while
+  # Ghostty may report either spelling. Both roots were derived and validated
+  # above; keep the slash boundary so a same-prefix sibling is still rejected.
+  local published_expected_config_path resolved_expected_config_path
+  published_expected_config_path="${app_host_home_input%/}/Library/Application Support/com.mitchellh.ghostty/config.ghostty"
+  resolved_expected_config_path="${app_host_home%/}/Library/Application Support/com.mitchellh.ghostty/config.ghostty"
   local matches scan_status line reported_path
   if matches="$(grep -E 'cmux DEV.*\[(config|default)\].*path=.*(Library/Application Support/com\.mitchellh\.ghostty/|/\.config/ghostty/)' "$log_path")"; then
     scan_status=0
@@ -145,7 +146,7 @@ validate_app_host_config_paths() {
       reported_path="${line#*path=}"
       case "$reported_path" in
         "$app_host_home"|"${app_host_home%/}/"* \
-          |"$app_host_published_home"|"${app_host_published_home%/}/"*) ;;
+          |"$app_host_home_input"|"${app_host_home_input%/}/"*) ;;
         *)
           echo "FAIL: Ghostty accessed configuration outside the isolated app-host home" >&2
           echo "$line" >&2
@@ -157,10 +158,10 @@ validate_app_host_config_paths() {
 
   if [ "$require_evidence" = "1" ]; then
     if ! grep -Fq \
-      "[default] reading configuration file path=$expected_config_path" \
+      "[default] reading configuration file path=$resolved_expected_config_path" \
       "$log_path" \
       && ! grep -Fq \
-        "[config] reading configuration file path=$expected_config_path" \
+        "[config] reading configuration file path=$resolved_expected_config_path" \
         "$log_path" \
       && ! grep -Fq \
         "[default] reading configuration file path=$published_expected_config_path" \
