@@ -835,7 +835,11 @@ struct AgentPromptSubmissionTests {
             panelId: panelID,
             refreshPorts: false
         )
-        #expect(workspace.agentPromptInputScope(forPanelId: panelID) != nil)
+        let originalScope = try #require(
+            workspace.agentPromptInputScope(forPanelId: panelID)
+        )
+        panel.surface.recordHumanPromptInput(.unknown)
+        #expect(panel.surface.hasUnconfirmedHumanPromptInput)
         workspace.recordAgentPID(
             key: agentKey,
             pid: pid_t.max - 1,
@@ -861,6 +865,116 @@ struct AgentPromptSubmissionTests {
         #expect(data["surface_id"] as? String == panelID.uuidString)
         #expect(data["retryable"] as? Bool == true)
         #expect(data["retry_after"] as? String == "agent_terminal_ready")
+        #expect(panel.surface.pendingSocketInputSnapshotForTests.items == 0)
+        #expect(panel.surface.hasUnconfirmedHumanPromptInput)
+
+        workspace.recordAgentPID(
+            key: agentKey,
+            pid: getpid(),
+            panelId: panelID,
+            refreshPorts: false
+        )
+        #expect(
+            workspace.agentPromptInputScope(forPanelId: panelID)
+                == originalScope
+        )
+
+        let busyResult = TerminalController.shared.v2WorkspaceAgentSubmit(
+            params: [
+                "workspace_id": workspace.id.uuidString,
+                "surface_id": panelID.uuidString,
+                "text": "must preserve the guarded human draft",
+            ]
+        )
+        guard case .err(let busyCode, _, _) = busyResult else {
+            Issue.record("Expected rejected_composer_busy")
+            return
+        }
+        #expect(busyCode == "rejected_composer_busy")
+        #expect(panel.surface.pendingSocketInputSnapshotForTests.items == 0)
+        #expect(panel.surface.hasUnconfirmedHumanPromptInput)
+
+        panel.surface.recordHumanPromptInput(.submissionBoundary)
+        #expect(
+            panel.surface.confirmPromptSubmission(message: "human draft")
+                == .human
+        )
+        #expect(!panel.surface.hasUnconfirmedHumanPromptInput)
+
+        let retryResult = TerminalController.shared.v2WorkspaceAgentSubmit(
+            params: [
+                "workspace_id": workspace.id.uuidString,
+                "surface_id": panelID.uuidString,
+                "text": "safe after the human prompt boundary",
+            ]
+        )
+        guard case .ok(let rawPayload) = retryResult else {
+            Issue.record("Expected recovered agent submission to queue")
+            return
+        }
+        let payload = try #require(rawPayload as? [String: Any])
+        #expect(payload["submitted"] as? Bool == true)
+        #expect(payload["queued"] as? Bool == true)
+        #expect(payload["workspace_id"] as? String == workspace.id.uuidString)
+        #expect(payload["surface_id"] as? String == panelID.uuidString)
+        let pending = panel.surface.pendingSocketInputSnapshotForTests
+        #expect(pending.items == 1)
+        #expect(pending.promptSubmissionItems == 1)
+        #expect(pending.inputTextItems == 0)
+        #expect(pending.keyEvents == 0)
+    }
+
+    @MainActor
+    @Test func hooklessAgentRemainsNotFoundWithoutTerminalWrite() throws {
+        let previousAppDelegate = AppDelegate.shared
+        let appDelegate = previousAppDelegate ?? AppDelegate()
+        let previousTabManager = appDelegate.tabManager
+        let tabManager = TabManager(autoWelcomeIfNeeded: false)
+        AppDelegate.shared = appDelegate
+        appDelegate.tabManager = tabManager
+        var workspaceForCleanup: Workspace?
+        var panelForCleanup: TerminalPanel?
+        defer {
+            panelForCleanup?.surface.releaseSurfaceForTesting()
+            if let workspace = workspaceForCleanup,
+               tabManager.tabs.contains(where: { $0.id == workspace.id }) {
+                tabManager.closeWorkspace(workspace)
+            }
+            appDelegate.tabManager = previousTabManager
+            AppDelegate.shared = previousAppDelegate
+        }
+
+        let workspace = tabManager.addWorkspace(select: true)
+        workspaceForCleanup = workspace
+        let panelID = try #require(workspace.focusedPanelId)
+        let panel = try #require(
+            workspace.terminalInputTarget(forPanelID: panelID)?.panel
+        )
+        panelForCleanup = panel
+        workspace.recordAgentPID(
+            key: "ollama",
+            pid: getpid(),
+            panelId: panelID,
+            refreshPorts: false
+        )
+        #expect(workspace.agentPromptInputScope(forPanelId: panelID) == nil)
+
+        panel.surface.releaseSurfaceForTesting()
+        let result = TerminalController.shared.v2WorkspaceAgentSubmit(params: [
+            "workspace_id": workspace.id.uuidString,
+            "surface_id": panelID.uuidString,
+            "text": "must not target a hookless agent",
+        ])
+
+        guard case .err(let code, _, let rawData) = result else {
+            Issue.record("Expected agent_not_found")
+            return
+        }
+        let data = try #require(rawData as? [String: Any])
+        #expect(code == "agent_not_found")
+        #expect(data["workspace_id"] as? String == workspace.id.uuidString)
+        #expect(data["surface_id"] as? String == panelID.uuidString)
+        #expect(data["retryable"] == nil)
         #expect(panel.surface.pendingSocketInputSnapshotForTests.items == 0)
     }
 

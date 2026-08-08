@@ -5,5 +5,6 @@ struct AgentPromptTerminalTarget {
     let surfaceID: UUID
     let panel: TerminalPanel
     let agentContext: String
-    let agentInputScope: String
+    /// Composer ownership, or `nil` while the agent process identity is unavailable.
+    let agentInputScope: String?
 }

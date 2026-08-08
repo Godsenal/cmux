@@ -111,7 +111,7 @@ extension TerminalController {
         guard case .success(let target) = agentPromptTerminalTarget(
             in: workspace,
             requestedSurfaceID: nil
-        ) else {
+        ), target.agentInputScope != nil else {
             return nil
         }
         return target.panel
@@ -234,18 +234,18 @@ extension TerminalController {
             panel: panel,
             workspace: workspace
         )
-        guard TextBoxAgentDetection.supportsActiveAgentPrefixes(
-            context: context
-        ), let agentInputScope = workspace.agentPromptInputScope(
-            forPanelId: panel.id
-        ) else {
+        guard workspace.agentPIDKeysByPanelId[panel.id]?.contains(where: {
+            workspace.isPromptCapableAgentPIDKey($0)
+        }) == true else {
             return nil
         }
         return AgentPromptTerminalTarget(
             surfaceID: surfaceID,
             panel: panel,
             agentContext: context,
-            agentInputScope: agentInputScope
+            agentInputScope: workspace.agentPromptInputScope(
+                forPanelId: panel.id
+            )
         )
     }
 

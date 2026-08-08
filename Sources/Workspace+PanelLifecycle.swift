@@ -139,10 +139,7 @@ extension Workspace {
         var firstCandidate: (key: String, scope: String)?
         for key in agentPIDKeysByPanelId[panelId] ?? [] {
             let context = "agentPIDKey:\(key)"
-            guard isStructuredAgentHookPIDKey(key),
-                  TextBoxAgentDetection.supportsActiveAgentPrefixes(
-                      context: context
-                  ),
+            guard isPromptCapableAgentPIDKey(key),
                   let identity = agentPIDProcessIdentitiesByKey[key] else {
                 continue
             }
@@ -351,6 +348,14 @@ extension Workspace {
 
     private func isStructuredAgentHookPIDKey(_ key: String) -> Bool {
         Self.structuredAgentHookStatusKeys.contains(agentStatusKey(forAgentPIDKey: key))
+    }
+
+    /// Whether a tracked agent key can own a recoverable prompt composer.
+    func isPromptCapableAgentPIDKey(_ key: String) -> Bool {
+        isStructuredAgentHookPIDKey(key)
+            && TextBoxAgentDetection.supportsActiveAgentPrefixes(
+                context: "agentPIDKey:\(key)"
+            )
     }
 
     @discardableResult
