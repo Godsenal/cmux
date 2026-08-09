@@ -1,6 +1,11 @@
 import Darwin
 import Dispatch
 import Foundation
+#if canImport(cmux_DEV)
+@testable import cmux_DEV
+#elseif canImport(cmux)
+@testable import cmux
+#endif
 
 /// Shared harness for the issue-7939 live delivery-target CLI regression
 /// tests: a mock cmux control server that can answer (or refuse) the

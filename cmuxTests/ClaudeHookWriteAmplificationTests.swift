@@ -1,5 +1,10 @@
 import Foundation
 import Testing
+#if canImport(cmux_DEV)
+@testable import cmux_DEV
+#elseif canImport(cmux)
+@testable import cmux
+#endif
 
 /// Regression coverage for https://github.com/manaflow-ai/cmux/issues/9693.
 /// Repeated ordinary Claude tool calls must not turn an already-running
@@ -251,6 +256,109 @@ struct ClaudeHookWriteAmplificationTests {
         )
         #expect(resolvedRecord?["agentLifecycle"] as? String == "running")
         #expect(resolvedRecord?["pendingBlockingToolUseIds"] as? [String] == [])
+    }
+
+    @Test func missingToolUseIdsKeepDistinctRequestScopedAttention() throws {
+        let context = try Harness.makeContext(name: "missing-tool-use-id-attention")
+        defer { context.cleanup() }
+
+        let workspaceId = "11111111-1111-1111-1111-111111111111"
+        let surfaceId = "22222222-2222-2222-2222-222222222222"
+        let sessionId = "missing-tool-use-id-attention-session"
+        let processIdentity = try #require(AgentPIDProcessIdentity(
+            pid: ProcessInfo.processInfo.processIdentifier
+        ))
+        try Harness.writeSessionStore(
+            to: context.storeURL,
+            sessionId: sessionId,
+            workspaceId: workspaceId,
+            surfaceId: surfaceId,
+            cwd: context.root.path
+        )
+
+        let serverHandled = Harness.startDeliveryTargetServer(
+            context: context,
+            surfacesByWorkspace: [workspaceId: [surfaceId]],
+            pidTarget: nil,
+            surfaceTargets: [surfaceId: workspaceId]
+        )
+        var environment = Harness.hookEnvironment(context: context)
+        environment["CMUX_WORKSPACE_ID"] = workspaceId
+        environment["CMUX_SURFACE_ID"] = surfaceId
+        environment["CMUX_CLAUDE_PID"] = String(processIdentity.pid)
+
+        func runHook(subcommand: String, eventName: String, plan: String) {
+            let result = Harness.runHookProcess(
+                context: context,
+                arguments: ["hooks", "claude", subcommand],
+                environment: environment,
+                standardInput: #"{"session_id":"\#(sessionId)","hook_event_name":"\#(eventName)","tool_name":"ExitPlanMode","tool_input":{"plan":"\#(plan)"},"permission_mode":"bypassPermissions","cwd":"\#(context.root.path)"}"#
+            )
+            #expect(serverHandled.wait(timeout: .now() + 5) == .success)
+            #expect(!result.timedOut, Comment(rawValue: result.stderr))
+            #expect(result.status == 0, Comment(rawValue: result.stderr))
+            #expect(result.stdout == "{}\n")
+        }
+
+        func attentionRequestIds(method: String, commands: [String]) -> [String] {
+            commands.compactMap { command in
+                guard let data = command.data(using: .utf8),
+                      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      object["method"] as? String == method,
+                      let params = object["params"] as? [String: Any] else {
+                    return nil
+                }
+                return params["request_id"] as? String
+            }
+        }
+
+        runHook(subcommand: "pre-tool-use", eventName: "PreToolUse", plan: "First plan")
+        runHook(subcommand: "pre-tool-use", eventName: "PreToolUse", plan: "Second plan")
+
+        let beginRequestIds = attentionRequestIds(
+            method: "feed.attention.begin",
+            commands: context.state.snapshot()
+        )
+        #expect(beginRequestIds.count == 2)
+        let firstRequestId = try #require(beginRequestIds.first)
+        let secondRequestId = try #require(beginRequestIds.dropFirst().first)
+        #expect(firstRequestId != secondRequestId)
+
+        var record = try Harness.sessionRecord(in: context.storeURL, sessionId: sessionId)
+        #expect(
+            record?["pendingBlockingToolUseIds"] as? [String]
+                == [firstRequestId, secondRequestId].sorted()
+        )
+
+        let beforeFirstCompletion = context.state.snapshot().count
+        runHook(subcommand: "input-resolved", eventName: "PostToolUse", plan: "First plan")
+        let firstCompletionCommands = Array(
+            context.state.snapshot().dropFirst(beforeFirstCompletion)
+        )
+        #expect(
+            attentionRequestIds(
+                method: "feed.attention.end",
+                commands: firstCompletionCommands
+            ) == [firstRequestId]
+        )
+        record = try Harness.sessionRecord(in: context.storeURL, sessionId: sessionId)
+        #expect(record?["agentLifecycle"] as? String == "needsInput")
+        #expect(record?["pendingBlockingToolUseIds"] as? [String] == [secondRequestId])
+
+        let beforeSecondCompletion = context.state.snapshot().count
+        runHook(subcommand: "input-resolved", eventName: "PostToolUse", plan: "Second plan")
+        let secondCompletionCommands = Array(
+            context.state.snapshot().dropFirst(beforeSecondCompletion)
+        )
+        #expect(
+            attentionRequestIds(
+                method: "feed.attention.end",
+                commands: secondCompletionCommands
+            ) == [secondRequestId]
+        )
+        record = try Harness.sessionRecord(in: context.storeURL, sessionId: sessionId)
+        #expect(record?["agentLifecycle"] as? String == "running")
+        #expect(record?["pendingBlockingToolUseIds"] as? [String] == [])
     }
 
 }
