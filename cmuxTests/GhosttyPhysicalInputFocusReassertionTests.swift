@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import CmuxTerminal
 import Testing
 
@@ -141,14 +142,69 @@ struct GhosttyPhysicalInputFocusReassertionTests {
         )
     }
 
-    private func makeHostedTerminal() throws -> HostedTerminal {
+    @Test
+    func claudePhysicalControlReturnCreatesRecoverablePromptBoundary() throws {
+        let terminal = try makeHostedTerminal(
+            ioMode: .manualMirror,
+            manualInputHandler: { _ in },
+            manualInputKeyNameResolver: { keyEvent in
+                guard keyEvent.keycode == UInt32(kVK_Return),
+                      keyEvent.mods.rawValue
+                        & GHOSTTY_MODS_CTRL.rawValue != 0 else {
+                    return nil
+                }
+                return "ctrl+enter"
+            }
+        )
+        defer {
+            terminal.surface.releaseSurfaceForTesting()
+            terminal.window.orderOut(nil)
+        }
+        #expect(
+            terminal.surface.hasLiveSurface,
+            "Manual-input regression setup requires a live Ghostty surface"
+        )
+        guard terminal.surface.hasLiveSurface else { return }
+
+        terminal.surface.synchronizePromptInputAgentScope(
+            "agentPIDKey:claude.physical-control-return",
+            controlReturnIsPromptSubmissionBoundary: true
+        )
+        terminal.surface.recordHumanPromptInput(.unknown)
+
+        let event = try makeKeyDownEvent(
+            characters: "\r",
+            charactersIgnoringModifiers: "\r",
+            keyCode: UInt16(kVK_Return),
+            modifierFlags: [.control],
+            window: terminal.window
+        )
+        terminal.surfaceView.keyDown(with: event)
+
+        #expect(
+            terminal.surface.confirmPromptSubmission(message: "human prompt")
+                == .human
+        )
+        #expect(!terminal.surface.hasUnconfirmedHumanPromptInput)
+    }
+
+    private func makeHostedTerminal(
+        ioMode: TerminalSurfaceIOMode = .exec,
+        manualInputHandler:
+            (@Sendable (TerminalManualInput) -> Void)? = nil,
+        manualInputKeyNameResolver:
+            (@MainActor @Sendable (ghostty_input_key_s) -> String?)? = nil
+    ) throws -> HostedTerminal {
         _ = NSApplication.shared
 
         let surface = TerminalSurface(
             tabId: UUID(),
             context: GHOSTTY_SURFACE_CONTEXT_SPLIT,
             configTemplate: nil,
-            workingDirectory: nil
+            workingDirectory: nil,
+            ioMode: ioMode,
+            manualInputHandler: manualInputHandler,
+            manualInputKeyNameResolver: manualInputKeyNameResolver
         )
         let hostedView = surface.hostedView
         let window = NSWindow(
@@ -193,12 +249,13 @@ struct GhosttyPhysicalInputFocusReassertionTests {
         characters: String,
         charactersIgnoringModifiers: String,
         keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags = [],
         window: NSWindow
     ) throws -> NSEvent {
         try #require(NSEvent.keyEvent(
             with: .keyDown,
             location: .zero,
-            modifierFlags: [],
+            modifierFlags: modifierFlags,
             timestamp: ProcessInfo.processInfo.systemUptime,
             windowNumber: window.windowNumber,
             context: nil,
