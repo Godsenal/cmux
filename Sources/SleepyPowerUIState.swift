@@ -15,10 +15,10 @@ final class SleepyPowerUIState {
     var isOn = false
     /// Whether a privileged toggle is in flight (disables the button).
     var isBusy = false
-    /// True after a Lock Mac attempt reported no lock mechanism was available,
-    /// so the overlay tells the user instead of silently staying unlocked
-    /// (the failure mode of https://github.com/manaflow-ai/cmux/issues/9730).
-    /// Cleared by a later successful lock or a new Sleepy Mode session.
+    /// True after a Lock Mac attempt reported failure, so the overlay tells the
+    /// user instead of silently staying unlocked (the failure mode of
+    /// https://github.com/manaflow-ai/cmux/issues/9730). Cleared when a later
+    /// attempt can issue the request or a new Sleepy Mode session begins.
     var lockFailed = false
 
     /// Starts a fresh overlay session and clears transient lock feedback.
@@ -33,9 +33,9 @@ final class SleepyPowerUIState {
         sessionID
     }
 
-    /// Records a lock result only when it belongs to the active session.
-    func recordLockResult(_ succeeded: Bool, for attemptedSessionID: UUID) {
+    /// Records whether a lock request was issued, only for the active session.
+    func recordLockResult(_ requestWasIssued: Bool, for attemptedSessionID: UUID) {
         guard attemptedSessionID == sessionID else { return }
-        lockFailed = !succeeded
+        lockFailed = !requestWasIssued
     }
 }

@@ -25,7 +25,7 @@ final class SystemCommandRunner: SleepyCommandRunning, @unchecked Sendable {
         return unsafeBitCast(symbol, to: AuthExecFn.self)
     }()
 
-    private typealias LockScreenFn = @convention(c) () -> Int32
+    private typealias LockScreenFn = @convention(c) () -> Void
 
     /// `SACLockScreenImmediate` from `login.framework` — the call behind the
     /// Apple menu's "Lock Screen" (⌃⌘Q), predating the macOS 14 deployment
@@ -33,7 +33,9 @@ final class SystemCommandRunner: SleepyCommandRunning, @unchecked Sendable {
     /// 26 removed together with `User.menu`
     /// (https://github.com/manaflow-ai/cmux/issues/9730). Resolved via `dlsym`
     /// like `authExec` above, so no private symbol is linked and a macOS that
-    /// drops it degrades to a reported failure, not a crash.
+    /// drops it degrades to a reported failure, not a crash. The private API has
+    /// no documented return contract; established clients declare it `void`, so
+    /// cmux deliberately does not interpret a return register as status.
     private static let lockScreenImmediate: LockScreenFn? = {
         guard let handle = dlopen("/System/Library/PrivateFrameworks/login.framework/login", RTLD_LAZY),
               let symbol = dlsym(handle, "SACLockScreenImmediate") else { return nil }
@@ -74,7 +76,8 @@ final class SystemCommandRunner: SleepyCommandRunning, @unchecked Sendable {
         }
     }
 
-    /// Engages the loginwindow lock without blocking the caller's actor.
+    /// Asks loginwindow to lock without blocking the caller's actor. Returns
+    /// whether the private lock request could be issued.
     @discardableResult
     #if compiler(>=6.2)
     @concurrent
@@ -82,14 +85,11 @@ final class SystemCommandRunner: SleepyCommandRunning, @unchecked Sendable {
     @Sendable
     #endif
     nonisolated func lockScreen() async -> Bool {
-        // The SAC call IPCs to loginwindow and returns a status int (0 on
-        // success). Honor it: loginwindow can reject the request even when the
-        // symbol resolves, and for a security-labeled action a spurious failure
-        // warning is acceptable while a silent false "locked" is not.
         guard let lockScreenImmediate = Self.lockScreenImmediate else {
             return false
         }
-        return lockScreenImmediate() == 0
+        lockScreenImmediate()
+        return true
     }
 
     @discardableResult

@@ -142,8 +142,8 @@ struct SleepyFaceView: View {
                     let ui = powerUIState
                     let sessionID = ui.currentSessionID()
                     Task {
-                        let succeeded = await power.lockMacNow()
-                        ui.recordLockResult(succeeded, for: sessionID)
+                        let requestWasIssued = await power.lockMacNow()
+                        ui.recordLockResult(requestWasIssued, for: sessionID)
                     }
                 } label: {
                     Label(String(localized: "sleepyMode.button.lockMac", defaultValue: "Lock Mac"), systemImage: "lock.fill")

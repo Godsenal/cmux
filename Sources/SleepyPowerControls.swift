@@ -41,7 +41,8 @@ final class SleepyPowerControls: SleepyPowerControlling {
     /// Engages the real macOS login lock (returning to the session requires the
     /// account password / Touch ID) — Apple's loginwindow, not our overlay. The
     /// lock is an in-process call behind the runner seam: the `CGSession`
-    /// binary this used to shell out to was removed in macOS 26 (#9730).
+    /// binary this used to shell out to was removed in macOS 26 (#9730). Returns
+    /// whether the runner could issue the system request.
     @discardableResult
     func lockMacNow() async -> Bool {
         await runner.lockScreen()
