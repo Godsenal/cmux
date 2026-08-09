@@ -232,11 +232,9 @@ struct ClaudeHookLifecycleCleanupTests {
         #expect(!commands.contains("clear_notifications --tab=\(newWorkspaceId)"))
     }
 
-    /// A pane moves mid-turn: the next PreToolUse (which skips the pid/tty
-    /// scan for frequency) must still re-home via the cheap `{surface_id}`
-    /// probe instead of mutating — and re-recording via upsert — the old
-    /// workspace's focused pane.
-    @Test func preToolUseFollowsMovedPaneWithoutPidProbe() throws {
+    /// Ordinary catch-all PreToolUse is acknowledgment-only even if its pane
+    /// moved; it must not resolve routing or write socket/session state.
+    @Test func ordinaryPreToolUseAcknowledgesMovedPaneWithoutStateWrites() throws {
         let context = try Harness.makeContext(name: "pre-tool-use-rehome")
         defer { context.cleanup() }
         let sessionId = "pre-tool-use-rehome-session"
@@ -249,6 +247,7 @@ struct ClaudeHookLifecycleCleanupTests {
             surfaceId: Self.liveSurfaceId,
             cwd: context.root.path
         )
+        let initialStore = try Data(contentsOf: context.storeURL)
         let serverHandled = Harness.startDeliveryTargetServer(
             context: context,
             surfacesByWorkspace: [
@@ -276,29 +275,18 @@ struct ClaudeHookLifecycleCleanupTests {
 
         let commands = context.state.snapshot()
         #expect(
-            commands.contains {
-                $0.hasPrefix("set_status claude_code Running ")
-                    && $0.contains("--tab=\(newWorkspaceId)")
-                    && $0.contains("--panel=\(Self.liveSurfaceId)")
-            },
-            "PreToolUse status must follow the moved pane; saw \(commands)"
+            commands.isEmpty,
+            "Ordinary PreToolUse must not route or mutate pane state; saw \(commands)"
         )
         #expect(
-            !commands.contains { $0.contains("--panel=\(Self.fallbackSurfaceId)") },
-            "PreToolUse must not mutate the old workspace's focused pane; saw \(commands)"
+            try Data(contentsOf: context.storeURL) == initialStore,
+            "Ordinary PreToolUse must not rewrite its session record"
         )
-        #expect(commands.contains("clear_notifications --tab=\(newWorkspaceId) --panel=\(Self.liveSurfaceId)"))
-        #expect(!commands.contains("clear_notifications --tab=\(newWorkspaceId)"))
-        let record = try Harness.sessionRecord(in: context.storeURL, sessionId: sessionId)
-        #expect(record?["workspaceId"] as? String == newWorkspaceId, "Session record must re-home, not re-pollute")
-        #expect(record?["surfaceId"] as? String == Self.liveSurfaceId)
     }
 
-    /// Older apps do not implement the live delivery-target resolver. A
-    /// high-frequency PreToolUse hook must retain the legacy validated
-    /// session/workspace/surface chain instead of treating the missing method
-    /// as an identity rejection and silently dropping the lifecycle update.
-    @Test func preToolUseWithoutResolverMethodKeepsLegacyRouting() throws {
+    /// Ordinary catch-all PreToolUse stays acknowledgment-only when the app
+    /// lacks the resolver method; it must not fall back to legacy state writes.
+    @Test func ordinaryPreToolUseWithoutResolverAcknowledgesWithoutStateWrites() throws {
         let context = try Harness.makeContext(name: "pre-tool-use-legacy-fallback")
         defer { context.cleanup() }
         let sessionId = "pre-tool-use-legacy-fallback-session"
@@ -310,6 +298,7 @@ struct ClaudeHookLifecycleCleanupTests {
             surfaceId: Self.liveSurfaceId,
             cwd: context.root.path
         )
+        let initialStore = try Data(contentsOf: context.storeURL)
         let serverHandled = Harness.startDeliveryTargetServer(
             context: context,
             surfacesByWorkspace: [Self.liveWorkspaceId: [Self.liveSurfaceId]],
@@ -334,20 +323,19 @@ struct ClaudeHookLifecycleCleanupTests {
 
         let commands = context.state.snapshot()
         #expect(
-            commands.contains {
-                $0.hasPrefix("set_status claude_code Running ")
-                    && $0.contains("--tab=\(Self.liveWorkspaceId)")
-                    && $0.contains("--panel=\(Self.liveSurfaceId)")
-            },
-            "PreToolUse must keep legacy routing when the resolver method is unavailable; saw \(commands)"
+            commands.isEmpty,
+            "Ordinary PreToolUse must not route or mutate pane state; saw \(commands)"
+        )
+        #expect(
+            try Data(contentsOf: context.storeURL) == initialStore,
+            "Ordinary PreToolUse must not rewrite its session record"
         )
     }
 
     /// The persisted session surface is stale/closed but the resolver
     /// recovers an authoritative live target from the spawn-time env surface:
-    /// the blocking needs-input branch (AskUserQuestion) must use the
-    /// resolved surface for its upsert, lifecycle, and notification — not
-    /// re-prefer the stale record surface and pin the prompt on a dead pane.
+    /// the blocking needs-input branch (AskUserQuestion) must use the resolved
+    /// target for its session upsert and Feed event, not the stale record.
     @Test func preToolUseNeedsInputUsesAuthoritativeResolvedSurface() throws {
         let context = try Harness.makeContext(name: "needs-input-live-surface")
         defer { context.cleanup() }
@@ -385,10 +373,18 @@ struct ClaudeHookLifecycleCleanupTests {
 
         let commands = context.state.snapshot()
         #expect(
-            commands.contains {
-                $0.hasPrefix("notify_target_async \(Self.liveWorkspaceId) \(Self.liveSurfaceId) ")
+            commands.contains { command in
+                guard let data = command.data(using: .utf8),
+                      let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      payload["method"] as? String == "feed.push",
+                      let params = payload["params"] as? [String: Any],
+                      let event = params["event"] as? [String: Any] else {
+                    return false
+                }
+                return event["workspace_id"] as? String == Self.liveWorkspaceId
+                    && event["surface_id"] as? String == Self.liveSurfaceId
             },
-            "Needs-input notification must target the authoritative resolved surface; saw \(commands)"
+            "Needs-input Feed event must use the authoritative resolved target; saw \(commands)"
         )
         #expect(
             !commands.contains { $0.contains(closedSurfaceId) },
