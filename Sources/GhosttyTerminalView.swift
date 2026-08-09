@@ -5665,6 +5665,20 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         }
     }
 
+    /// Reconciles prompt ownership after Ghostty accepts a key before text interpretation.
+    func recordPromptOwnershipAfterAcceptedGhosttyKey(
+        _ keyEvent: ghostty_input_key_s
+    ) {
+        guard let terminalSurface else { return }
+        // Ghostty bindings are agent/config-specific. Even Ctrl-C or Escape
+        // may mutate a composer. Route the accepted key through the shared
+        // classifier so only a configured Ctrl-Return establishes a boundary.
+        terminalSurface.recordHumanPromptKey(
+            keycode: keyEvent.keycode,
+            mods: keyEvent.mods
+        )
+    }
+
     override func keyDown(with event: NSEvent) {
         terminalSurface?.didReceiveExplicitInput()
 #if DEBUG
@@ -5829,16 +5843,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             // If not (e.g. `ignore` keybind), fall through to interpretKeyEvents
             // so the IME gets a chance to process this event.
             if handled {
-                if let terminalSurface {
-                    // Ghostty bindings are agent/config-specific. Even Ctrl-C
-                    // or Escape may mutate a composer. Route the accepted key
-                    // through the shared classifier so only a configured
-                    // Ctrl-Return can establish a recoverable boundary.
-                    terminalSurface.recordHumanPromptKey(
-                        keycode: UInt32(event.keyCode),
-                        mods: keyEvent.mods
-                    )
-                }
+                recordPromptOwnershipAfterAcceptedGhosttyKey(keyEvent)
                 return
             }
         }
