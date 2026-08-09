@@ -95,6 +95,23 @@ struct SleepyPowerControlsLockTests {
 
         #expect(dlsym(handle, "SACLockScreenImmediate") != nil)
     }
+
+    /// A completed lock attempt from an exited overlay must not restore its
+    /// warning after the user starts a fresh Sleepy Mode session.
+    @MainActor
+    @Test func newSessionClearsAndRejectsPriorLockFailure() {
+        let state = SleepyPowerUIState()
+        state.beginSession()
+        let exitedSessionID = state.currentSessionID()
+        state.recordLockResult(false, for: exitedSessionID)
+        #expect(state.lockFailed)
+
+        state.beginSession()
+        #expect(!state.lockFailed)
+
+        state.recordLockResult(false, for: exitedSessionID)
+        #expect(!state.lockFailed)
+    }
 }
 
 /// Recording runner whose in-process lock succeeds, without touching the host.

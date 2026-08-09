@@ -140,7 +140,11 @@ struct SleepyFaceView: View {
                     // is dismissible, so the user needs to know the Mac is unlocked.
                     let power = power
                     let ui = powerUIState
-                    Task { ui.lockFailed = !(await power.lockMacNow()) }
+                    let sessionID = ui.currentSessionID()
+                    Task {
+                        let succeeded = await power.lockMacNow()
+                        ui.recordLockResult(succeeded, for: sessionID)
+                    }
                 } label: {
                     Label(String(localized: "sleepyMode.button.lockMac", defaultValue: "Lock Mac"), systemImage: "lock.fill")
                 }
