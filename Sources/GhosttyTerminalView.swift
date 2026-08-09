@@ -5831,9 +5831,13 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             if handled {
                 if let terminalSurface {
                     // Ghostty bindings are agent/config-specific. Even Ctrl-C
-                    // or Escape may mutate a composer, so only a structured
-                    // submit hook or process-identity change can clear this.
-                    terminalSurface.recordHumanPromptInput(.unknown)
+                    // or Escape may mutate a composer. Route the accepted key
+                    // through the shared classifier so only a configured
+                    // Ctrl-Return can establish a recoverable boundary.
+                    terminalSurface.recordHumanPromptKey(
+                        keycode: UInt32(event.keyCode),
+                        mods: keyEvent.mods
+                    )
                 }
                 return
             }
