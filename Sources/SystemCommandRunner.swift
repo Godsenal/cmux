@@ -40,12 +40,6 @@ final class SystemCommandRunner: SleepyCommandRunning, @unchecked Sendable {
         return unsafeBitCast(symbol, to: LockScreenFn.self)
     }()
 
-    /// Whether the in-process lock call resolved. Internal so the CI canary
-    /// test can assert the symbol still resolves on each supported macOS —
-    /// a future macOS removing it turns CI red instead of the Lock Mac button
-    /// silently breaking again.
-    static var isLockScreenAvailable: Bool { lockScreenImmediate != nil }
-
     private let privilegedQueue = DispatchQueue(label: "com.cmux.sleepyMode.privileged")
     private var authorization: AuthorizationRef?  // accessed only on privilegedQueue
 
@@ -80,23 +74,22 @@ final class SystemCommandRunner: SleepyCommandRunning, @unchecked Sendable {
         }
     }
 
+    /// Engages the loginwindow lock without blocking the caller's actor.
     @discardableResult
-    func lockScreen() async -> Bool {
-        // The SAC call IPCs to loginwindow; keep it off the caller's actor
-        // like every other system effect here. It returns a status int
-        // (0 on success). Honor it: loginwindow can reject the request even
-        // when the symbol resolves, and for a security-labeled action a
-        // spurious failure warning is acceptable while a silent false
-        // "locked" is not.
-        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            DispatchQueue.global(qos: .userInitiated).async {
-                guard let lockScreenImmediate = Self.lockScreenImmediate else {
-                    continuation.resume(returning: false)
-                    return
-                }
-                continuation.resume(returning: lockScreenImmediate() == 0)
-            }
+    #if compiler(>=6.2)
+    @concurrent
+    #else
+    @Sendable
+    #endif
+    nonisolated func lockScreen() async -> Bool {
+        // The SAC call IPCs to loginwindow and returns a status int (0 on
+        // success). Honor it: loginwindow can reject the request even when the
+        // symbol resolves, and for a security-labeled action a spurious failure
+        // warning is acceptable while a silent false "locked" is not.
+        guard let lockScreenImmediate = Self.lockScreenImmediate else {
+            return false
         }
+        return lockScreenImmediate() == 0
     }
 
     @discardableResult

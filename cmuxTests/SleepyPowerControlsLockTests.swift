@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 
@@ -46,7 +47,7 @@ struct SleepyPowerControlsLockTests {
 
         await controls.lockMacNow()
 
-        #expect(!runner.ranTools.contains { $0.contains("/Menu Extras/User.menu/") })
+        #expect(runner.ranTools.isEmpty)
     }
 
     /// The lock is an in-process system effect behind the runner seam: it must
@@ -86,8 +87,13 @@ struct SleepyPowerControlsLockTests {
     /// macOS 26 dropped `CGSession`, this goes red instead of the Lock Mac
     /// button silently doing nothing again. Resolving the symbol does not
     /// invoke it, so this cannot lock the host.
-    @Test func loginFrameworkLockResolvesOnThisMacOS() {
-        #expect(SystemCommandRunner.isLockScreenAvailable)
+    @Test func loginFrameworkLockResolvesOnThisMacOS() throws {
+        let handle = try #require(
+            dlopen("/System/Library/PrivateFrameworks/login.framework/login", RTLD_LAZY)
+        )
+        defer { _ = dlclose(handle) }
+
+        #expect(dlsym(handle, "SACLockScreenImmediate") != nil)
     }
 }
 
@@ -118,7 +124,12 @@ private final class LockCapableRecordingRunner: SleepyCommandRunning, @unchecked
     }
 
     @discardableResult
-    func lockScreen() async -> Bool {
+    #if compiler(>=6.2)
+    @concurrent
+    #else
+    @Sendable
+    #endif
+    nonisolated func lockScreen() async -> Bool {
         lock.withLock { recordedLockScreenCalls += 1 }
         return true
     }

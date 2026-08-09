@@ -13,12 +13,24 @@ protocol SleepyCommandRunning: Sendable {
     /// Engage the macOS login lock in-process (no subprocess exists for this
     /// since macOS 26 removed `CGSession`). Returns whether the lock call was
     /// available and reported success.
-    @discardableResult func lockScreen() async -> Bool
+    @discardableResult
+    #if compiler(>=6.2)
+    @concurrent
+    #else
+    @Sendable
+    #endif
+    nonisolated func lockScreen() async -> Bool
 }
 
 extension SleepyCommandRunning {
     /// Default so command-recording fakes stay compiling and inert: locking is
     /// reported unavailable unless a conformer (the real
     /// `SystemCommandRunner`) explicitly provides the system effect.
-    @discardableResult func lockScreen() async -> Bool { false }
+    @discardableResult
+    #if compiler(>=6.2)
+    @concurrent
+    #else
+    @Sendable
+    #endif
+    nonisolated func lockScreen() async -> Bool { false }
 }
