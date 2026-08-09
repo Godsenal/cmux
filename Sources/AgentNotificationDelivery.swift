@@ -1,4 +1,5 @@
 import CmuxSettings
+import CmuxNotifications
 import Foundation
 
 /// Applies agent notification policy and publishes accepted events through the shared mutation bus.
@@ -39,6 +40,7 @@ struct AgentNotificationDelivery: Sendable {
            ) {
             return false
         }
+        let replyShape = TerminalNotificationReplyShape.forAgentCategory(wire: category?.rawValue)
         if let correlationKey {
             TerminalMutationBus.shared.enqueueMainActorMutation {
                 TerminalNotificationStore.shared.addNotification(
@@ -47,6 +49,7 @@ struct AgentNotificationDelivery: Sendable {
                     title: title,
                     subtitle: subtitle,
                     body: body,
+                    replyShape: replyShape,
                     cooldownKey: correlationKey
                 )
             }
@@ -57,6 +60,7 @@ struct AgentNotificationDelivery: Sendable {
                 title: title,
                 subtitle: subtitle,
                 body: body,
+                replyShape: replyShape,
                 coalesces: coalesces
             )
         }

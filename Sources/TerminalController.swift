@@ -23,6 +23,7 @@ import Bonsplit
 import WebKit
 import CmuxSidebar
 import CmuxWorkspaces
+import CmuxNotifications
 import CmuxSimulator
 
 extension Notification.Name {
@@ -2428,6 +2429,50 @@ class TerminalController {
         case "notification.create_for_caller":
             return v2Result(id: id, self.v2NotificationCreateForCaller(params: params))
         case "agent.resolve_delivery_target": return v2Result(id: id, self.v2AgentResolveDeliveryTarget(params: params))
+        #if DEBUG
+        case "debug.notification.status":
+            return v2Ok(id: id, result: notificationDebugStatus())
+        case "debug.notification.mode":
+            guard let enabled = notificationDebugBoolParam(params, "enabled") else {
+                return v2Error(
+                    id: id,
+                    code: "invalid_params",
+                    message: String(
+                        localized: "debug.notification.error.missingEnabled",
+                        defaultValue: "Pass enabled=true or enabled=false to turn notification debug mode on or off."
+                    )
+                )
+            }
+            NotificationDebugEmitter.shared.isModeEnabled = enabled
+            return v2Ok(id: id, result: ["enabled": enabled])
+        case "debug.notification.emit":
+            guard let kind = notificationDebugStringParam(params, "kind"), !kind.isEmpty else {
+                return v2Error(
+                    id: id,
+                    code: "invalid_params",
+                    message: String(
+                        localized: "debug.notification.error.missingKind",
+                        defaultValue: "Pass kind=<notification kind> to choose which debug notification to emit."
+                    )
+                )
+            }
+            let emitted = NotificationDebugEmitter.shared.emit(
+                kind: kind,
+                forceBanner: notificationDebugBoolParam(params, "force_banner") ?? false,
+                target: notificationDebugCallerTarget(params: params)
+            )
+            guard emitted else {
+                return v2Error(
+                    id: id,
+                    code: "invalid_params",
+                    message: String(
+                        localized: "debug.notification.error.invalidKindOrTarget",
+                        defaultValue: "Unknown kind or no notification target"
+                    )
+                )
+            }
+            return v2Ok(id: id, result: ["kind": kind])
+        #endif
 
         // Diff review comments
         case "comments.list": return v2Result(id: id, self.v2CommentsList(params: params))
@@ -12297,7 +12342,8 @@ class TerminalController {
                 surfaceId: surfaceId,
                 title: title,
                 subtitle: subtitle,
-                body: body
+                body: body,
+                replyShape: TerminalNotificationReplyShape.forAgentCategory(wire: meta?.category.rawValue)
             )
             return "OK"
         }
@@ -12333,7 +12379,8 @@ class TerminalController {
                 surfaceId: surfaceId,
                 title: title,
                 subtitle: subtitle,
-                body: body
+                body: body,
+                replyShape: TerminalNotificationReplyShape.forAgentCategory(wire: meta?.category.rawValue)
             )
             return "OK"
         }
@@ -12379,7 +12426,8 @@ class TerminalController {
                     surfaceId: fastPath.panelId,
                     title: title,
                     subtitle: subtitle,
-                    body: body
+                    body: body,
+                    replyShape: TerminalNotificationReplyShape.forAgentCategory(wire: meta?.category.rawValue)
                 )
                 return "OK"
             }
@@ -12402,7 +12450,8 @@ class TerminalController {
                 surfaceId: panelId,
                 title: title,
                 subtitle: subtitle,
-                body: body
+                body: body,
+                replyShape: TerminalNotificationReplyShape.forAgentCategory(wire: meta?.category.rawValue)
             )
             return "OK"
         }
@@ -14112,6 +14161,12 @@ class TerminalController {
             )
         case let method where method.hasPrefix("mobile.browser."):
             result = await v2MobileBrowserDispatch(
+                method: method,
+                params: request.params,
+                connectionID: executionContext?.connectionID
+            )
+        case let method where method.hasPrefix("mobile.simulator."):
+            result = await v2MobileSimulatorDispatch(
                 method: method,
                 params: request.params,
                 connectionID: executionContext?.connectionID
