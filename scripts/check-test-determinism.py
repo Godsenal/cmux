@@ -520,7 +520,20 @@ def _lex_source_line(
         index += 1
 
     if state.frames:
-        state.frames[-1].escaped = False
+        frame = state.frames[-1]
+        is_javascript_ordinary_string = (
+            path_suffix in (".ts", ".tsx", ".js", ".mjs")
+            and frame.kind == "string"
+            and frame.quote in ("'", '"')
+        )
+        # Ordinary JavaScript strings cannot cross a physical newline unless
+        # the final backslash explicitly continues them. Ending an unmatched
+        # frame here also prevents quote characters inside regex literals from
+        # masking executable code on following lines.
+        if is_javascript_ordinary_string and not frame.escaped:
+            state.frames.pop()
+        else:
+            state.frames[-1].escaped = False
     return ("".join(comment_stripped), "".join(executable))
 
 
