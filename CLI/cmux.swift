@@ -142,10 +142,10 @@ struct ClaudeHookSessionRecord: Codable, Equatable {
     var lastPermissionMode: String?
     var isRestorable: Bool?
     var agentLifecycle: AgentHibernationLifecycleState?
-    /// Sorted, unique Claude `tool_use_id` values for blocking tools that have
-    /// entered Needs input but have not completed. An empty array is a durable
-    /// correlation tombstone; `nil` keeps compatibility with records written
-    /// before completion correlation existed.
+    /// Sorted, unique request IDs for blocking tools that have entered Needs
+    /// input but have not completed. Claude `tool_use_id` values are preserved;
+    /// hooks without one receive a durable cmux fallback. An empty array is a
+    /// correlation tombstone; `nil` keeps compatibility with older records.
     var pendingBlockingToolUseIds: [String]? = nil
     /// FIFO payload signatures for correlated blockers. Claude omits
     /// `tool_use_id` from PermissionRequest, so this sequence maps that later
@@ -25625,7 +25625,7 @@ struct CMUXCLI {
                     ? surfaceId
                     : (nonEmptyClaudeHookIdentifier(mappedSession?.surfaceId) ?? surfaceId)
                 let toolUseId = extractClaudeHookToolUseId(from: parsedInput.rawObject)
-                let recordedBlockingOwner = try? sessionStore.recordBlockingToolNeedsInput(
+                let registeredBlockingTool = try? sessionStore.recordBlockingToolNeedsInput(
                     sessionId: sessionId,
                     workspaceId: workspaceId,
                     surfaceId: existingSurfaceId,
@@ -25657,10 +25657,10 @@ struct CMUXCLI {
                     beginClaudeBlockingAttention(
                         client: client,
                         sessionId: sessionId,
-                        toolUseId: toolUseId,
+                        toolUseId: registeredBlockingTool?.requestId ?? toolUseId,
                         workspaceId: workspaceId,
                         surfaceId: existingSurfaceId,
-                        owner: recordedBlockingOwner ?? mappedSession,
+                        owner: registeredBlockingTool?.owner ?? mappedSession,
                         title: title,
                         subtitle: waitingSubtitle,
                         body: needsInputBody

@@ -7,6 +7,16 @@ extension ClaudeHookSessionStore {
         let toolUseId: String
     }
 
+    struct BlockingToolRegistration: Equatable {
+        let owner: ClaudeHookSessionRecord
+        let requestId: String
+    }
+
+    enum BlockingToolSelection: Equatable {
+        case selected(requestId: String?)
+        case ignoreUnmatched
+    }
+
     enum BlockingToolResolution: Equatable {
         case resolved
         case ignoreUnmatched
@@ -15,8 +25,8 @@ extension ClaudeHookSessionStore {
     private static let maximumBlockingToolCorrelationCount = 256
 
     /// Atomically records a blocking Claude tool and its Needs input lifecycle.
-    /// A payload without an ID deliberately selects legacy session-wide
-    /// completion semantics so older Claude versions cannot become stuck.
+    /// Hooks without Claude's `tool_use_id` receive a durable synthetic request
+    /// ID so concurrent legacy blockers still own distinct transient attention.
     func recordBlockingToolNeedsInput(
         sessionId: String,
         workspaceId: String,
@@ -28,7 +38,7 @@ extension ClaudeHookSessionStore {
         rawObject: [String: Any]?,
         lastSubtitle: String,
         lastBody: String
-    ) throws -> ClaudeHookSessionRecord? {
+    ) throws -> BlockingToolRegistration? {
         guard let sessionId = normalizedBlockingToolIdentifier(sessionId) else { return nil }
         return try withLockedState { state in
             let now = Date.now.timeIntervalSince1970
@@ -53,37 +63,77 @@ extension ClaudeHookSessionStore {
             if let agentPID {
                 updateProcessIdentity(&record, pid: agentPID)
             }
-            if let toolUseId = normalizedBlockingToolIdentifier(toolUseId) {
-                let pending = (record.pendingBlockingToolUseIds ?? []) + [toolUseId]
-                record.pendingBlockingToolUseIds = normalizedBlockingToolUseIds(pending)
-                if let payloadSignature = blockingToolPayloadSignature(from: rawObject) {
-                    var correlations = (record.pendingBlockingToolCorrelations ?? [])
-                        .filter { $0.toolUseId != toolUseId }
-                    correlations.append(BlockingToolCorrelation(
-                        payloadSignature: payloadSignature,
-                        toolUseId: toolUseId
-                    ))
-                    if correlations.count > Self.maximumBlockingToolCorrelationCount {
-                        let overflowCount =
-                            correlations.count - Self.maximumBlockingToolCorrelationCount
-                        let evictedToolUseIds = Set(
-                            correlations.prefix(overflowCount).map(\.toolUseId)
-                        )
-                        correlations.removeFirst(overflowCount)
-                        record.pendingBlockingToolUseIds = normalizedBlockingToolUseIds(
-                            (record.pendingBlockingToolUseIds ?? []).filter {
-                                !evictedToolUseIds.contains($0)
-                            }
-                        )
-                    }
-                    record.pendingBlockingToolCorrelations = correlations
+            let requestId = normalizedBlockingToolIdentifier(toolUseId)
+                ?? "cmux-fallback-\(UUID().uuidString.lowercased())"
+            let pending = (record.pendingBlockingToolUseIds ?? []) + [requestId]
+            record.pendingBlockingToolUseIds = normalizedBlockingToolUseIds(pending)
+            if let payloadSignature = blockingToolPayloadSignature(from: rawObject) {
+                var correlations = (record.pendingBlockingToolCorrelations ?? [])
+                    .filter { $0.toolUseId != requestId }
+                correlations.append(BlockingToolCorrelation(
+                    payloadSignature: payloadSignature,
+                    toolUseId: requestId
+                ))
+                if correlations.count > Self.maximumBlockingToolCorrelationCount {
+                    let overflowCount =
+                        correlations.count - Self.maximumBlockingToolCorrelationCount
+                    let evictedToolUseIds = Set(
+                        correlations.prefix(overflowCount).map(\.toolUseId)
+                    )
+                    correlations.removeFirst(overflowCount)
+                    record.pendingBlockingToolUseIds = normalizedBlockingToolUseIds(
+                        (record.pendingBlockingToolUseIds ?? []).filter {
+                            !evictedToolUseIds.contains($0)
+                        }
+                    )
                 }
-            } else {
-                record.pendingBlockingToolUseIds = nil
-                record.pendingBlockingToolCorrelations = nil
+                record.pendingBlockingToolCorrelations = correlations
+            }
+            if let pendingIds = record.pendingBlockingToolUseIds,
+               pendingIds.count > Self.maximumBlockingToolCorrelationCount {
+                var retainedIds = Set(
+                    pendingIds
+                        .filter { $0 != requestId }
+                        .suffix(Self.maximumBlockingToolCorrelationCount - 1)
+                )
+                retainedIds.insert(requestId)
+                record.pendingBlockingToolUseIds = Array(retainedIds).sorted()
+                record.pendingBlockingToolCorrelations =
+                    record.pendingBlockingToolCorrelations?
+                    .filter { retainedIds.contains($0.toolUseId) }
             }
             state.sessions[sessionId] = record
-            return record
+            return BlockingToolRegistration(owner: record, requestId: requestId)
+        }
+    }
+
+    /// Selects the durable request that a completion must release without
+    /// consuming it. The caller removes attention first, then commits the
+    /// matching state transition only after the app acknowledges that release.
+    func selectBlockingToolInput(
+        sessionId: String,
+        toolUseId: String?,
+        rawObject: [String: Any]?
+    ) throws -> BlockingToolSelection {
+        let explicitRequestId = normalizedBlockingToolIdentifier(toolUseId)
+        guard let sessionId = normalizedBlockingToolIdentifier(sessionId) else {
+            return .selected(requestId: explicitRequestId)
+        }
+        return try withLockedState { state in
+            guard let record = state.sessions[sessionId],
+                  let storedPending = record.pendingBlockingToolUseIds else {
+                // Records written before correlation use the shared legacy key.
+                return .selected(requestId: explicitRequestId)
+            }
+            let pending = normalizedBlockingToolUseIds(storedPending)
+            guard let requestId = correlatedBlockingToolUseId(
+                explicitToolUseId: explicitRequestId,
+                rawObject: rawObject,
+                record: record
+            ), pending.contains(requestId) else {
+                return .ignoreUnmatched
+            }
+            return .selected(requestId: requestId)
         }
     }
 

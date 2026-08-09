@@ -28,16 +28,6 @@ final class FeedTransientAttentionStore {
         let target: FeedCoordinator.AttentionTarget
         let notificationCorrelationKey: String
         let owner: Owner
-
-        init(
-            target: FeedCoordinator.AttentionTarget,
-            notificationCorrelationKey: String,
-            owner: Owner
-        ) {
-            self.target = target
-            self.notificationCorrelationKey = notificationCorrelationKey
-            self.owner = owner
-        }
     }
 
     private struct StoredEntry {

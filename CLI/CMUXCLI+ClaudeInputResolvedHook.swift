@@ -6,7 +6,8 @@ extension CMUXCLI {
     /// PermissionRequest in bypass mode; clear that state when the blocking
     /// tool itself finishes, without observing every ordinary tool call. The
     /// wrapper runs each targeted hook synchronously with its tool, while the
-    /// session store correlates parallel callbacks by Claude's `tool_use_id`.
+    /// session store correlates parallel callbacks by Claude's `tool_use_id`
+    /// or a durable payload-matched fallback request ID.
     func runClaudeInputResolvedHook(
         client: SocketClient,
         telemetry: CLISocketSentryTelemetry,
@@ -69,10 +70,32 @@ extension CMUXCLI {
             return
         }
         let toolUseId = extractClaudeHookToolUseId(from: parsedInput.rawObject)
+        let attentionRequestId: String?
+        do {
+            switch try sessionStore.selectBlockingToolInput(
+                sessionId: sessionId,
+                toolUseId: toolUseId,
+                rawObject: parsedInput.rawObject
+            ) {
+            case .selected(let requestId):
+                attentionRequestId = requestId
+            case .ignoreUnmatched:
+                telemetry.breadcrumb("claude-hook.input-resolved.unmatched")
+                printClaudeHookAck()
+                return
+            }
+        } catch {
+            telemetry.breadcrumb(
+                "claude-hook.input-resolved.selection-error",
+                data: ["error": String(describing: error)]
+            )
+            printClaudeHookAck()
+            return
+        }
         guard endClaudeBlockingAttention(
             client: client,
             sessionId: sessionId,
-            toolUseId: toolUseId
+            toolUseId: attentionRequestId
         ) else {
             // Keep the durable pending ID so a later completion or turn
             // boundary can retry releasing app-owned transient attention.
@@ -88,7 +111,7 @@ extension CMUXCLI {
                 surfaceId: surfaceId,
                 cwd: parsedInput.cwd,
                 transcriptPath: parsedInput.transcriptPath,
-                toolUseId: toolUseId
+                toolUseId: attentionRequestId
             )
         } catch {
             telemetry.breadcrumb(
