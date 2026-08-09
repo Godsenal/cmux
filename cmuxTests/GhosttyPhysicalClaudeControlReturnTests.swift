@@ -48,6 +48,10 @@ struct GhosttyPhysicalClaudeControlReturnTests {
             terminal.surface.releaseSurfaceForTesting()
             terminal.window.orderOut(nil)
         }
+        try #require(
+            waitUntil { terminal.surface.hasLiveSurface },
+            "Physical-input verification requires a live Ghostty surface"
+        )
 
         terminal.surface.synchronizePromptInputAgentScope(
             "agentPIDKey:claude.physical-control-return",
