@@ -881,6 +881,12 @@ def _self_test() -> int:
             {RULE_LIVE_NETWORK_HOST},
         ),
         (
+            "web/tests/regex-quote.ts",
+            'const quote = /"/;\n'
+            'await fetch("https://api.openai.com/v1/items")\n',
+            {RULE_LIVE_NETWORK_HOST},
+        ),
+        (
             "tests/d.py",
             "sock.connect(('8.8.8.8', 53))\n",  # bare IP -> only the fixed port is high-confidence
             {RULE_FIXED_PORT_BIND},
