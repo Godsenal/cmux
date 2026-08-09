@@ -69,6 +69,17 @@ extension CMUXCLI {
             return
         }
         let toolUseId = extractClaudeHookToolUseId(from: parsedInput.rawObject)
+        guard endClaudeBlockingAttention(
+            client: client,
+            sessionId: sessionId,
+            toolUseId: toolUseId
+        ) else {
+            // Keep the durable pending ID so a later completion or turn
+            // boundary can retry releasing app-owned transient attention.
+            telemetry.breadcrumb("claude-hook.input-resolved.release-unacknowledged")
+            printClaudeHookAck()
+            return
+        }
         let resolution: ClaudeHookSessionStore.BlockingToolResolution
         do {
             resolution = try sessionStore.resolveBlockingToolInput(
@@ -95,11 +106,7 @@ extension CMUXCLI {
             printClaudeHookAck()
             return
         case .resolved:
-            endClaudeBlockingAttention(
-                client: client,
-                sessionId: sessionId,
-                toolUseId: toolUseId
-            )
+            break
         }
         printClaudeHookAck()
     }

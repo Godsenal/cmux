@@ -141,7 +141,7 @@ final class TerminalNotificationPolicyInFlightStore {
 
     func discard(correlationKeys: Set<String>) {
         guard !correlationKeys.isEmpty else { return }
-        let idsToDiscard = requests.compactMap { id, entry in
+        let idsToDiscard: [UUID] = requests.compactMap { id, entry in
             guard let correlationKey = entry.request.correlationKey else { return nil }
             return correlationKeys.contains(correlationKey) ? id : nil
         }

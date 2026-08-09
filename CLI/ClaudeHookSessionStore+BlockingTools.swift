@@ -23,13 +23,14 @@ extension ClaudeHookSessionStore {
         surfaceId: String,
         cwd: String?,
         transcriptPath: String?,
+        agentPID: Int?,
         toolUseId: String?,
         rawObject: [String: Any]?,
         lastSubtitle: String,
         lastBody: String
-    ) throws {
-        guard let sessionId = normalizedBlockingToolIdentifier(sessionId) else { return }
-        try withLockedState { state in
+    ) throws -> ClaudeHookSessionRecord? {
+        guard let sessionId = normalizedBlockingToolIdentifier(sessionId) else { return nil }
+        return try withLockedState { state in
             let now = Date.now.timeIntervalSince1970
             var record = state.sessions[sessionId] ?? ClaudeHookSessionRecord(
                 sessionId: sessionId,
@@ -49,6 +50,9 @@ extension ClaudeHookSessionStore {
                 lastBody: lastBody,
                 now: now
             )
+            if let agentPID {
+                updateProcessIdentity(&record, pid: agentPID)
+            }
             if let toolUseId = normalizedBlockingToolIdentifier(toolUseId) {
                 let pending = (record.pendingBlockingToolUseIds ?? []) + [toolUseId]
                 record.pendingBlockingToolUseIds = normalizedBlockingToolUseIds(pending)
@@ -79,6 +83,7 @@ extension ClaudeHookSessionStore {
                 record.pendingBlockingToolCorrelations = nil
             }
             state.sessions[sessionId] = record
+            return record
         }
     }
 

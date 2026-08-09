@@ -22,15 +22,20 @@ extension TerminalController {
                 data: nil
             )
         }
-        guard let ownerProcessIdentity = transientAttentionProcessIdentity(params) else {
-            return .err(
-                code: "invalid_params",
-                message: String(
-                    localized: "feed.attention.error.invalidProcessIdentity",
-                    defaultValue: "feed.attention.begin owner process identity is invalid"
-                ),
-                data: nil
-            )
+        let remoteWorkspaceRaw = params["_cmux_remote_workspace_id"]
+        let owner: FeedTransientAttentionStore.Owner
+        if remoteWorkspaceRaw != nil {
+            guard let remoteWorkspaceId = transientAttentionUUID(remoteWorkspaceRaw),
+                  let remoteWorkspace = controlTabForSidebarMutation(id: remoteWorkspaceId),
+                  remoteWorkspace.isRemoteWorkspace else {
+                return invalidTransientAttentionOwnerResult()
+            }
+            owner = .remoteWorkspace(remoteWorkspaceId)
+        } else {
+            guard let ownerProcessIdentity = transientAttentionProcessIdentity(params) else {
+                return invalidTransientAttentionOwnerResult()
+            }
+            owner = .localProcess(ownerProcessIdentity)
         }
         let subtitle = transientAttentionString(params["subtitle"], maxBytes: 512) ?? ""
         let body = transientAttentionString(params["body"], maxBytes: 4_096) ?? ""
@@ -40,7 +45,7 @@ extension TerminalController {
             requestId: requestId,
             workspaceId: workspaceId,
             surfaceId: surfaceId,
-            ownerProcessIdentity: ownerProcessIdentity,
+            owner: owner,
             title: title,
             subtitle: subtitle,
             body: body
@@ -50,24 +55,69 @@ extension TerminalController {
 
     func v2FeedTransientAttentionEnd(params: [String: Any]) -> V2CallResult {
         guard let source = transientAttentionString(params["source"], maxBytes: 80),
-              let sessionId = transientAttentionString(params["session_id"], maxBytes: 512),
-              let requestId = transientAttentionString(params["request_id"], maxBytes: 512)
+              let sessionId = transientAttentionString(params["session_id"], maxBytes: 512)
         else {
             return .err(
                 code: "invalid_params",
                 message: String(
                     localized: "feed.attention.error.endRequired",
-                    defaultValue: "feed.attention.end requires source, session_id, and request_id"
+                    defaultValue: "feed.attention.end requires source, session_id, and either request_id or all_requests: true"
                 ),
                 data: nil
             )
         }
-        let ended = FeedCoordinator.shared.endTransientBlockingAttention(
-            source: source,
-            sessionId: sessionId,
-            requestId: requestId
-        )
+        let remoteWorkspaceRaw = params["_cmux_remote_workspace_id"]
+        let authenticatedRemoteWorkspaceId: UUID?
+        if remoteWorkspaceRaw != nil {
+            guard let remoteWorkspaceId = transientAttentionUUID(remoteWorkspaceRaw),
+                  let remoteWorkspace = controlTabForSidebarMutation(id: remoteWorkspaceId),
+                  remoteWorkspace.isRemoteWorkspace else {
+                return invalidTransientAttentionOwnerResult()
+            }
+            authenticatedRemoteWorkspaceId = remoteWorkspaceId
+        } else {
+            authenticatedRemoteWorkspaceId = nil
+        }
+        let ended: Bool
+        if (params["all_requests"] as? Bool) == true {
+            ended = FeedCoordinator.shared.endTransientBlockingAttention(
+                source: source,
+                sessionId: sessionId,
+                authenticatedRemoteWorkspaceId: authenticatedRemoteWorkspaceId
+            )
+        } else {
+            guard let requestId = transientAttentionString(
+                params["request_id"],
+                maxBytes: 512
+            ) else {
+                return .err(
+                    code: "invalid_params",
+                    message: String(
+                        localized: "feed.attention.error.endRequired",
+                        defaultValue: "feed.attention.end requires source, session_id, and either request_id or all_requests: true"
+                    ),
+                    data: nil
+                )
+            }
+            ended = FeedCoordinator.shared.endTransientBlockingAttention(
+                source: source,
+                sessionId: sessionId,
+                requestId: requestId,
+                authenticatedRemoteWorkspaceId: authenticatedRemoteWorkspaceId
+            )
+        }
         return .ok(["ended": ended])
+    }
+
+    private func invalidTransientAttentionOwnerResult() -> V2CallResult {
+        .err(
+            code: "invalid_params",
+            message: String(
+                localized: "feed.attention.error.invalidOwnerIdentity",
+                defaultValue: "feed.attention owner identity is invalid"
+            ),
+            data: nil
+        )
     }
 
     private func transientAttentionString(_ rawValue: Any?, maxBytes: Int) -> String? {

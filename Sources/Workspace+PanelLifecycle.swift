@@ -426,6 +426,9 @@ extension Workspace {
         if publishSurfaceClosedEvent {
             publishCmuxSurfaceClosed(panelId, paneId: paneId, panel: panel, origin: origin)
         }
+        if !preservesTerminalForTransfer {
+            FeedCoordinator.shared.endTransientBlockingAttention(surfaceId: panelId)
+        }
 
         let closedAgentRuntimeState = agentRuntimeState(forPanelId: panelId)
         removePendingTerminalInputObservers(forPanelId: panelId)

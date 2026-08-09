@@ -886,7 +886,7 @@ struct FeedCoordinatorTests {
                 FeedTransientAttentionStore.Entry(
                     target: target,
                     notificationCorrelationKey: "notification-\(index)",
-                    ownerProcessIdentity: processIdentity
+                    owner: .localProcess(processIdentity)
                 ),
                 for: key
             )
@@ -938,7 +938,7 @@ struct FeedCoordinatorTests {
             FeedTransientAttentionStore.Entry(
                 target: firstTarget,
                 notificationCorrelationKey: "first-generation-notification",
-                ownerProcessIdentity: firstGeneration
+                owner: .localProcess(firstGeneration)
             ),
             for: firstGenerationKey
         )
@@ -946,7 +946,7 @@ struct FeedCoordinatorTests {
             FeedTransientAttentionStore.Entry(
                 target: secondTarget,
                 notificationCorrelationKey: "reused-pid-notification",
-                ownerProcessIdentity: reusedPIDGeneration
+                owner: .localProcess(reusedPIDGeneration)
             ),
             for: reusedPIDKey
         )
@@ -963,6 +963,89 @@ struct FeedCoordinatorTests {
                 .map(\.notificationCorrelationKey) == ["reused-pid-notification"]
         )
         #expect(store.entry(for: reusedPIDKey) == nil)
+    }
+
+    @Test @MainActor
+    func transientAttentionStoreScopesRemoteReleaseAndLifecycleCleanup() {
+        let store = FeedTransientAttentionStore()
+        let targetWorkspaceId = UUID()
+        let remoteOwnerA = UUID()
+        let remoteOwnerB = UUID()
+        let firstPanelId = UUID()
+        let secondPanelId = UUID()
+        let thirdPanelId = UUID()
+        let localPanelId = UUID()
+        let localOwner = AgentPIDProcessIdentity(
+            pid: 303,
+            startSeconds: 12,
+            startMicroseconds: 3
+        )
+        let keys = [
+            FeedTransientAttentionStore.Key(
+                source: "claude",
+                sessionId: "shared-session",
+                requestId: "remote-a"
+            ),
+            FeedTransientAttentionStore.Key(
+                source: "claude",
+                sessionId: "shared-session",
+                requestId: "remote-b"
+            ),
+            FeedTransientAttentionStore.Key(
+                source: "claude",
+                sessionId: "other-session",
+                requestId: "other-session"
+            ),
+            FeedTransientAttentionStore.Key(
+                source: "claude",
+                sessionId: "shared-session",
+                requestId: "local"
+            ),
+        ]
+        let entries: [(UUID, String, FeedTransientAttentionStore.Owner)] = [
+            (firstPanelId, "remote-a", .remoteWorkspace(remoteOwnerA)),
+            (secondPanelId, "remote-b", .remoteWorkspace(remoteOwnerB)),
+            (thirdPanelId, "other-session", .remoteWorkspace(remoteOwnerA)),
+            (localPanelId, "local", .localProcess(localOwner)),
+        ]
+        for (key, entry) in zip(keys, entries) {
+            store.insert(
+                FeedTransientAttentionStore.Entry(
+                    target: FeedCoordinator.AttentionTarget(
+                        workspaceId: targetWorkspaceId,
+                        panelId: entry.0,
+                        statusKey: "claude_code"
+                    ),
+                    notificationCorrelationKey: entry.1,
+                    owner: entry.2
+                ),
+                for: key
+            )
+        }
+
+        #expect(
+            store.removeValues(
+                source: "claude",
+                sessionId: "shared-session",
+                authenticatedRemoteWorkspaceId: remoteOwnerA
+            ).map(\.notificationCorrelationKey) == ["remote-a"]
+        )
+        #expect(store.entry(for: keys[1]) != nil)
+        #expect(store.entry(for: keys[2]) != nil)
+        #expect(store.entry(for: keys[3]) != nil)
+
+        #expect(
+            store.removeValues(workspaceId: remoteOwnerB)
+                .map(\.notificationCorrelationKey) == ["remote-b"]
+        )
+        #expect(
+            store.removeValues(surfaceId: thirdPanelId)
+                .map(\.notificationCorrelationKey) == ["other-session"]
+        )
+        #expect(
+            store.removeValues(workspaceId: targetWorkspaceId)
+                .map(\.notificationCorrelationKey) == ["local"]
+        )
     }
 
     @Test(arguments: ["ppid", "ppid_start_seconds", "ppid_start_microseconds"])

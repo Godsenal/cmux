@@ -1114,17 +1114,7 @@ final class ClaudeHookSessionStore {
             record.transcriptPath = transcriptPath
         }
         if let pid {
-            let previousPID = record.pid
-            record.pid = pid
-            if let identity = processStartIdentity(pid: pid) {
-                record.pidStartSeconds = identity.seconds
-                record.pidStartMicroseconds = identity.microseconds
-            } else if previousPID != pid {
-                // A different numeric PID without a captured start identity cannot
-                // inherit generation authority from the previous process.
-                record.pidStartSeconds = nil
-                record.pidStartMicroseconds = nil
-            }
+            updateProcessIdentity(&record, pid: pid)
         }
         if let launchCommand {
             let existingHasArguments = !(record.launchCommand?.arguments.isEmpty ?? true)
@@ -1163,6 +1153,23 @@ final class ClaudeHookSessionStore {
             record.hadPendingBackgroundWorkAtStop = hadPendingBackgroundWorkAtStop
         }
         record.updatedAt = now
+    }
+
+    /// Refreshes the exact process generation without allowing a new PID to
+    /// inherit a previous process's birth identity.
+    func updateProcessIdentity(
+        _ record: inout ClaudeHookSessionRecord,
+        pid: Int
+    ) {
+        let previousPID = record.pid
+        record.pid = pid
+        if let identity = processStartIdentity(pid: pid) {
+            record.pidStartSeconds = identity.seconds
+            record.pidStartMicroseconds = identity.microseconds
+        } else if previousPID != pid {
+            record.pidStartSeconds = nil
+            record.pidStartMicroseconds = nil
+        }
     }
 
     private func processStartIdentity(pid: Int) -> (seconds: Int64, microseconds: Int64)? {
@@ -24906,8 +24913,7 @@ struct CMUXCLI {
                 if let sessionId = parsedInput.sessionId {
                     endClaudeBlockingAttentionForTurnBoundary(
                         client: client,
-                        sessionId: sessionId,
-                        record: mappedSession
+                        sessionId: sessionId
                     )
                     _ = try? sessionStore.upsert(
                         sessionId: sessionId,
@@ -25044,8 +25050,7 @@ struct CMUXCLI {
             if let sessionId = parsedInput.sessionId {
                 endClaudeBlockingAttentionForTurnBoundary(
                     client: client,
-                    sessionId: sessionId,
-                    record: mappedSession
+                    sessionId: sessionId
                 )
                 // A forked session's first hook is this prompt-submit — its
                 // SessionStart fired under the parent session id — so capture the
@@ -25377,8 +25382,7 @@ struct CMUXCLI {
             if let consumedSession {
                 endClaudeBlockingAttentionForTurnBoundary(
                     client: client,
-                    sessionId: consumedSession.sessionId,
-                    record: consumedSession
+                    sessionId: consumedSession.sessionId
                 )
                 // App-visible cleanup targets the live owner of the session's
                 // pane when the resolver answered authoritatively; the
@@ -25500,8 +25504,7 @@ struct CMUXCLI {
             didSendFeedTelemetry = true
             let toolName = parsedInput.object?["tool_name"] as? String
             let isBlockingNeedsInputTool = toolName == "AskUserQuestion" || toolName == "ExitPlanMode"
-            let usesVerboseToolStatus = UserDefaults.standard.bool(forKey: "claudeCodeVerboseStatus")
-            if !isBlockingNeedsInputTool, !usesVerboseToolStatus {
+            if !isBlockingNeedsInputTool {
                 telemetry.breadcrumb("claude-hook.pre-tool-use.ordinary-ignored")
                 printClaudeHookAck()
                 return
@@ -25526,7 +25529,8 @@ struct CMUXCLI {
             let workspaceId = resolvedTarget.workspaceId
             let resolvedSurface = resolvedTarget
             let surfaceId = resolvedSurface.surfaceId
-            let claudePid = mappedSession?.pid ?? claudeAgentPID(from: ProcessInfo.processInfo.environment)
+            let claudePid = claudeAgentPID(from: ProcessInfo.processInfo.environment)
+                ?? mappedSession?.pid
             let suppressVisibleMutations = shouldSuppressNestedAgentVisibleMutations(
                 currentAgentPID: claudePid,
                 env: ProcessInfo.processInfo.environment
@@ -25589,12 +25593,13 @@ struct CMUXCLI {
                     ? surfaceId
                     : (nonEmptyClaudeHookIdentifier(mappedSession?.surfaceId) ?? surfaceId)
                 let toolUseId = extractClaudeHookToolUseId(from: parsedInput.rawObject)
-                try? sessionStore.recordBlockingToolNeedsInput(
+                let recordedBlockingOwner = try? sessionStore.recordBlockingToolNeedsInput(
                     sessionId: sessionId,
                     workspaceId: workspaceId,
                     surfaceId: existingSurfaceId,
                     cwd: parsedInput.cwd,
                     transcriptPath: parsedInput.transcriptPath,
+                    agentPID: claudePid,
                     toolUseId: toolUseId,
                     rawObject: parsedInput.rawObject,
                     lastSubtitle: waitingSubtitle,
@@ -25623,7 +25628,7 @@ struct CMUXCLI {
                         toolUseId: toolUseId,
                         workspaceId: workspaceId,
                         surfaceId: existingSurfaceId,
-                        owner: mappedSession,
+                        owner: recordedBlockingOwner ?? mappedSession,
                         title: title,
                         subtitle: waitingSubtitle,
                         body: needsInputBody
@@ -25652,18 +25657,11 @@ struct CMUXCLI {
                 surfaceId: surfaceId
             )
 
-            let statusValue: String
-            if usesVerboseToolStatus,
-               let toolStatus = describeToolUse(parsedInput.object) {
-                statusValue = toolStatus
-            } else {
-                statusValue = "Running"
-            }
             try setClaudeStatus(
                 client: client,
                 workspaceId: workspaceId,
                 surfaceId: surfaceId,
-                value: statusValue,
+                value: "Running",
                 icon: "bolt.fill",
                 color: "#4C8DFF",
                 pid: claudePid
@@ -26049,66 +26047,6 @@ struct CMUXCLI {
         summary = summary.trimmingCharacters(in: .whitespaces)
         guard !summary.isEmpty else { return nil }
         return truncate(summary, maxLength: 180)
-    }
-
-    private func describeToolUse(_ object: [String: Any]?) -> String? {
-        guard let object, let toolName = object["tool_name"] as? String else { return nil }
-        let input = object["tool_input"] as? [String: Any]
-
-        switch toolName {
-        case "Read":
-            if let path = input?["file_path"] as? String {
-                return "Reading \(shortenPath(path))"
-            }
-            return "Reading file"
-        case "Edit":
-            if let path = input?["file_path"] as? String {
-                return "Editing \(shortenPath(path))"
-            }
-            return "Editing file"
-        case "Write":
-            if let path = input?["file_path"] as? String {
-                return "Writing \(shortenPath(path))"
-            }
-            return "Writing file"
-        case "Bash":
-            if let cmd = input?["command"] as? String {
-                let first = cmd.components(separatedBy: .whitespacesAndNewlines).first ?? cmd
-                let short = String(first.prefix(30))
-                return "Running \(short)"
-            }
-            return "Running command"
-        case "Glob":
-            if let pattern = input?["pattern"] as? String {
-                return "Searching \(String(pattern.prefix(30)))"
-            }
-            return "Searching files"
-        case "Grep":
-            if let pattern = input?["pattern"] as? String {
-                return "Grep \(String(pattern.prefix(30)))"
-            }
-            return "Searching code"
-        case "Agent":
-            if let desc = input?["description"] as? String {
-                return String(desc.prefix(40))
-            }
-            return "Subagent"
-        case "WebFetch":
-            return "Fetching URL"
-        case "WebSearch":
-            if let query = input?["query"] as? String {
-                return "Search: \(String(query.prefix(30)))"
-            }
-            return "Web search"
-        default:
-            return toolName
-        }
-    }
-
-    private func shortenPath(_ path: String) -> String {
-        let url = URL(fileURLWithPath: path)
-        let name = url.lastPathComponent
-        return name.isEmpty ? String(path.suffix(30)) : name
     }
 
     private func resolveSurfaceIdForClaudeHook(

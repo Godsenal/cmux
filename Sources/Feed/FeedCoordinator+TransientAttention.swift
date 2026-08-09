@@ -11,19 +11,32 @@ final class FeedTransientAttentionStore {
         let requestId: String
     }
 
+    /// The lifecycle authority that can retire one transient attention entry.
+    enum Owner: Hashable, Sendable {
+        /// One exact local process generation, protected against PID reuse.
+        case localProcess(AgentPIDProcessIdentity)
+        /// The live remote workspace whose authenticated relay created it.
+        case remoteWorkspace(UUID)
+
+        var localProcessIdentity: AgentPIDProcessIdentity? {
+            guard case .localProcess(let identity) = self else { return nil }
+            return identity
+        }
+    }
+
     struct Entry: Sendable {
         let target: FeedCoordinator.AttentionTarget
         let notificationCorrelationKey: String
-        let ownerProcessIdentity: AgentPIDProcessIdentity
+        let owner: Owner
 
         init(
             target: FeedCoordinator.AttentionTarget,
             notificationCorrelationKey: String,
-            ownerProcessIdentity: AgentPIDProcessIdentity
+            owner: Owner
         ) {
             self.target = target
             self.notificationCorrelationKey = notificationCorrelationKey
-            self.ownerProcessIdentity = ownerProcessIdentity
+            self.owner = owner
         }
     }
 
@@ -74,24 +87,45 @@ final class FeedTransientAttentionStore {
     }
 
     func removeValues(ownerProcessIdentity: AgentPIDProcessIdentity) -> [Entry] {
-        removeValues { $0.ownerProcessIdentity == ownerProcessIdentity }
-    }
-
-    func removeValues(workspaceId: UUID) -> [Entry] {
-        removeValues { $0.target.workspaceId == workspaceId }
-    }
-
-    func contains(ownerProcessIdentity: AgentPIDProcessIdentity) -> Bool {
-        entries.values.contains {
-            $0.entry.ownerProcessIdentity == ownerProcessIdentity
+        removeValues { _, entry in
+            entry.owner == .localProcess(ownerProcessIdentity)
         }
     }
 
+    func removeValues(workspaceId: UUID) -> [Entry] {
+        removeValues { _, entry in
+            entry.target.workspaceId == workspaceId
+                || entry.owner == .remoteWorkspace(workspaceId)
+        }
+    }
+
+    func removeValues(surfaceId: UUID) -> [Entry] {
+        removeValues { _, entry in entry.target.panelId == surfaceId }
+    }
+
+    func removeValues(
+        source: String,
+        sessionId: String,
+        authenticatedRemoteWorkspaceId: UUID?
+    ) -> [Entry] {
+        removeValues { key, entry in
+            guard key.source == source, key.sessionId == sessionId else {
+                return false
+            }
+            guard let authenticatedRemoteWorkspaceId else { return true }
+            return entry.owner == .remoteWorkspace(authenticatedRemoteWorkspaceId)
+        }
+    }
+
+    func localProcessIdentities() -> Set<AgentPIDProcessIdentity> {
+        Set(entries.values.compactMap { $0.entry.owner.localProcessIdentity })
+    }
+
     private func removeValues(
-        where predicate: (Entry) -> Bool
+        where predicate: (Key, Entry) -> Bool
     ) -> [Entry] {
         let matchingKeys = entries
-            .filter { predicate($0.value.entry) }
+            .filter { predicate($0.key, $0.value.entry) }
             .sorted { $0.value.insertionOrder < $1.value.insertionOrder }
             .map(\.key)
         return matchingKeys.compactMap(removeValue(for:))
@@ -110,7 +144,7 @@ extension FeedCoordinator {
         requestId: String,
         workspaceId: UUID,
         surfaceId: UUID,
-        ownerProcessIdentity: AgentPIDProcessIdentity,
+        owner: FeedTransientAttentionStore.Owner,
         title: String,
         subtitle: String,
         body: String
@@ -120,11 +154,12 @@ extension FeedCoordinator {
             sessionId: sessionId,
             requestId: requestId
         )
-        guard AgentPIDProcessIdentity(pid: ownerProcessIdentity.pid) == ownerProcessIdentity else {
+        if case .localProcess(let ownerProcessIdentity) = owner,
+           AgentPIDProcessIdentity(pid: ownerProcessIdentity.pid) != ownerProcessIdentity {
             return false
         }
         if let existing = transientAttentionStore.entry(for: key) {
-            return existing.ownerProcessIdentity == ownerProcessIdentity
+            return existing.owner == owner
         }
 
         guard let liveTarget = AppDelegate.shared?.agentNotificationDeliveryTarget(
@@ -148,21 +183,24 @@ extension FeedCoordinator {
             return false
         }
 
-        let correlationKey = "transient-agent-attention:\(UUID().uuidString)"
+        let correlationKey =
+            TerminalNotification.transientAgentAttentionCorrelationPrefix + UUID().uuidString
         let evicted = transientAttentionStore.insert(
             FeedTransientAttentionStore.Entry(
                 target: target,
                 notificationCorrelationKey: correlationKey,
-                ownerProcessIdentity: ownerProcessIdentity
+                owner: owner
             ),
             for: key
         )
         concludeTransientBlockingAttention(evicted)
-        guard armTransientAttentionProcessWatcher(ownerProcessIdentity) else {
-            if let entry = transientAttentionStore.removeValue(for: key) {
-                concludeTransientBlockingAttention([entry])
+        if case .localProcess(let ownerProcessIdentity) = owner {
+            guard armTransientAttentionProcessWatcher(ownerProcessIdentity) else {
+                if let entry = transientAttentionStore.removeValue(for: key) {
+                    concludeTransientBlockingAttention([entry])
+                }
+                return false
             }
-            return false
         }
         _ = AgentNotificationDelivery().enqueue(
             workspaceID: liveWorkspaceId,
@@ -184,18 +222,42 @@ extension FeedCoordinator {
     func endTransientBlockingAttention(
         source: String,
         sessionId: String,
-        requestId: String
+        requestId: String,
+        authenticatedRemoteWorkspaceId: UUID? = nil
     ) -> Bool {
         let key = FeedTransientAttentionStore.Key(
             source: source,
             sessionId: sessionId,
             requestId: requestId
         )
-        guard let entry = transientAttentionStore.removeValue(for: key) else {
+        guard let existing = transientAttentionStore.entry(for: key) else {
             return false
         }
+        if let authenticatedRemoteWorkspaceId,
+           existing.owner != .remoteWorkspace(authenticatedRemoteWorkspaceId) {
+            return false
+        }
+        guard let entry = transientAttentionStore.removeValue(for: key) else { return false }
         concludeTransientBlockingAttention([entry])
         return true
+    }
+
+    /// Releases every transient request in one current agent session. This is
+    /// the turn-boundary reconciliation path and remains retryable even after
+    /// durable blocker IDs have moved on to the next turn.
+    @MainActor
+    func endTransientBlockingAttention(
+        source: String,
+        sessionId: String,
+        authenticatedRemoteWorkspaceId: UUID? = nil
+    ) -> Bool {
+        let entries = transientAttentionStore.removeValues(
+            source: source,
+            sessionId: sessionId,
+            authenticatedRemoteWorkspaceId: authenticatedRemoteWorkspaceId
+        )
+        concludeTransientBlockingAttention(entries)
+        return !entries.isEmpty
     }
 
     /// Releases every transient request owned by an exited agent process.
@@ -212,12 +274,21 @@ extension FeedCoordinator {
         )
     }
 
-    /// Releases requests whose workspace was explicitly closed, balancing
-    /// attention even when the hook process or its terminal callback vanished.
+    /// Releases requests targeted at or relay-owned by a workspace that closed,
+    /// balancing attention even when the hook callback vanished.
     @MainActor
     func endTransientBlockingAttention(workspaceId: UUID) {
         concludeTransientBlockingAttention(
             transientAttentionStore.removeValues(workspaceId: workspaceId)
+        )
+    }
+
+    /// Releases requests whose terminal surface closed or whose remote
+    /// terminal lifecycle ended while the workspace itself stayed open.
+    @MainActor
+    func endTransientBlockingAttention(surfaceId: UUID) {
+        concludeTransientBlockingAttention(
+            transientAttentionStore.removeValues(surfaceId: surfaceId)
         )
     }
 
@@ -235,8 +306,12 @@ extension FeedCoordinator {
                 correlationKeys: correlationKeys
             )
         }
-        for identity in Set(entries.map(\.ownerProcessIdentity)) {
-            disarmTransientAttentionProcessWatcherIfUnused(identity)
+        let releasedLocalOwners = Set(
+            entries.compactMap { $0.owner.localProcessIdentity }
+        )
+        let retainedLocalOwners = transientAttentionStore.localProcessIdentities()
+        for identity in releasedLocalOwners.subtracting(retainedLocalOwners) {
+            disarmTransientAttentionProcessWatcher(identity)
         }
     }
 
@@ -274,11 +349,10 @@ extension FeedCoordinator {
     }
 
     @MainActor
-    private func disarmTransientAttentionProcessWatcherIfUnused(
+    private func disarmTransientAttentionProcessWatcher(
         _ identity: AgentPIDProcessIdentity
     ) {
-        guard !transientAttentionStore.contains(ownerProcessIdentity: identity),
-              let source = transientAttentionProcessWatchers.removeValue(forKey: identity) else {
+        guard let source = transientAttentionProcessWatchers.removeValue(forKey: identity) else {
             return
         }
         source.cancel()

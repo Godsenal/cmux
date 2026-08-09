@@ -89,6 +89,7 @@ enum ClaudeHookLiveDeliveryHarness {
         acknowledgesPIDResolution: Bool = true,
         resumeClearSucceeds: Bool = true,
         resumeClearOwnsCheckpoint: Bool? = true,
+        feedAttentionEndSucceeds: Bool = true,
         feedExitPlanModesByRequestId: [String: String] = [:],
         feedTerminalStatusesByRequestId: [String: String] = [:],
         feedExitPlanModesByPlan: [String: String] = [:],
@@ -167,8 +168,20 @@ enum ClaudeHookLiveDeliveryHarness {
                     }
                 }
                 return v2Response(id: id, ok: true, result: [:])
-            case "feed.attention.begin", "feed.attention.end":
+            case "feed.attention.begin":
                 return v2Response(id: id, ok: true, result: [:])
+            case "feed.attention.end":
+                if feedAttentionEndSucceeds {
+                    return v2Response(id: id, ok: true, result: [:])
+                }
+                return v2Response(
+                    id: id,
+                    ok: false,
+                    error: [
+                        "code": "attention_release_failed",
+                        "message": "injected attention release failure",
+                    ]
+                )
             case "surface.resume.set":
                 return v2Response(id: id, ok: true, result: ["resume_binding": [:]])
             case "surface.resume.clear":

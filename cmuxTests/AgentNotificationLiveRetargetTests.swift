@@ -126,18 +126,28 @@ extension AgentNotificationRegressionTests {
     @Test
     func testTransientAttentionAndNotificationUseSurfaceCurrentWorkspace() throws {
         let fixture = try makeLiveRetargetFixture()
-        defer { fixture.restore() }
+        let sessionId = "moved-transient-session"
+        let requestId = "moved-transient-request"
+        defer {
+            _ = FeedCoordinator.shared.endTransientBlockingAttention(
+                source: "claude",
+                sessionId: sessionId,
+                requestId: requestId
+            )
+            TerminalMutationBus.shared.drainForTesting()
+            fixture.restore()
+        }
         let processIdentity = try #require(AgentPIDProcessIdentity(
             pid: ProcessInfo.processInfo.processIdentifier
         ))
 
         let began = FeedCoordinator.shared.beginTransientBlockingAttention(
             source: "claude",
-            sessionId: "moved-transient-session",
-            requestId: "moved-transient-request",
+            sessionId: sessionId,
+            requestId: requestId,
             workspaceId: fixture.claimedWorkspace.id,
             surfaceId: fixture.panelId,
-            ownerProcessIdentity: processIdentity,
+            owner: .localProcess(processIdentity),
             title: "Claude Code",
             subtitle: "Waiting",
             body: "Waiting for input"
@@ -150,8 +160,8 @@ extension AgentNotificationRegressionTests {
                 == .needsInput
         )
         #expect(
-            fixture.claimedWorkspace.agentLifecycleStatesByPanelId[fixture.panelId]?["claude_code"]
-                == nil,
+            fixture.claimedWorkspace.agentLifecycleStatesByPanelId.values
+                .allSatisfy { $0["claude_code"] == nil },
             "transient attention must not mutate the stale claimed workspace"
         )
         let recorded = fixture.store.notifications.filter { $0.title == "Claude Code" }
@@ -160,8 +170,8 @@ extension AgentNotificationRegressionTests {
 
         #expect(FeedCoordinator.shared.endTransientBlockingAttention(
             source: "claude",
-            sessionId: "moved-transient-session",
-            requestId: "moved-transient-request"
+            sessionId: sessionId,
+            requestId: requestId
         ))
         TerminalMutationBus.shared.drainForTesting()
         #expect(fixture.store.notifications.allSatisfy { $0.title != "Claude Code" })
@@ -170,18 +180,28 @@ extension AgentNotificationRegressionTests {
     @Test
     func testTransientAttentionFailsClosedWhenSurfaceDisappeared() throws {
         let fixture = try makeLiveRetargetFixture()
-        defer { fixture.restore() }
+        let sessionId = "missing-transient-session"
+        let requestId = "missing-transient-request"
+        defer {
+            _ = FeedCoordinator.shared.endTransientBlockingAttention(
+                source: "claude",
+                sessionId: sessionId,
+                requestId: requestId
+            )
+            TerminalMutationBus.shared.drainForTesting()
+            fixture.restore()
+        }
         let processIdentity = try #require(AgentPIDProcessIdentity(
             pid: ProcessInfo.processInfo.processIdentifier
         ))
 
         let began = FeedCoordinator.shared.beginTransientBlockingAttention(
             source: "claude",
-            sessionId: "missing-transient-session",
-            requestId: "missing-transient-request",
+            sessionId: sessionId,
+            requestId: requestId,
             workspaceId: fixture.claimedWorkspace.id,
             surfaceId: UUID(),
-            ownerProcessIdentity: processIdentity,
+            owner: .localProcess(processIdentity),
             title: "Missing transient",
             subtitle: "Waiting",
             body: "Waiting for input"
@@ -190,6 +210,127 @@ extension AgentNotificationRegressionTests {
 
         #expect(!began)
         #expect(fixture.store.notifications.allSatisfy { $0.title != "Missing transient" })
+    }
+
+    @Test
+    func testRelayTransientAttentionFollowsMovedSurfaceAndScopesReleaseToOwner() throws {
+        let fixture = try makeLiveRetargetFixture()
+        let remoteConfiguration = WorkspaceRemoteConfiguration(
+            destination: "example.invalid",
+            port: nil,
+            identityFile: nil,
+            sshOptions: [],
+            localProxyPort: nil,
+            relayPort: nil,
+            relayID: nil,
+            relayToken: nil,
+            localSocketPath: nil,
+            terminalStartupCommand: nil
+        )
+        fixture.claimedWorkspace.remoteConfiguration = remoteConfiguration
+        fixture.owningWorkspace.remoteConfiguration = remoteConfiguration
+
+        let sessionId = "relay-transient-session"
+        let requestId = "relay-transient-request"
+        defer {
+            _ = FeedCoordinator.shared.endTransientBlockingAttention(
+                source: "claude",
+                sessionId: sessionId,
+                authenticatedRemoteWorkspaceId: fixture.claimedWorkspace.id
+            )
+            TerminalMutationBus.shared.drainForTesting()
+            fixture.restore()
+        }
+        let beginResult = TerminalController.shared.v2FeedTransientAttentionBegin(params: [
+            "source": "claude",
+            "session_id": sessionId,
+            "request_id": requestId,
+            "workspace_id": fixture.owningWorkspace.id.uuidString,
+            "surface_id": fixture.panelId.uuidString,
+            "title": "Remote Claude Code",
+            "subtitle": "Waiting",
+            "body": "Waiting for input",
+            "_cmux_remote_workspace_id": fixture.claimedWorkspace.id.uuidString,
+        ])
+        guard case .ok(let beginPayload) = beginResult,
+              let begin = beginPayload as? [String: Any] else {
+            Issue.record("Expected relay attention begin, got \(beginResult)")
+            return
+        }
+        #expect(begin["active"] as? Bool == true)
+        TerminalMutationBus.shared.drainForTesting()
+
+        let notification = try #require(
+            fixture.store.notifications.first { $0.title == "Remote Claude Code" }
+        )
+        #expect(notification.tabId == fixture.owningWorkspace.id)
+        #expect(!notification.persistsInSessionSnapshot)
+        let snapshot = fixture.owningWorkspace.sessionSnapshot(includeScrollback: false)
+        let panelSnapshot = try #require(
+            snapshot.panels.first { $0.id == fixture.panelId }
+        )
+        #expect(panelSnapshot.notifications?.isEmpty ?? true)
+
+        let wrongOwnerResult = TerminalController.shared.v2FeedTransientAttentionEnd(params: [
+            "source": "claude",
+            "session_id": sessionId,
+            "request_id": requestId,
+            "_cmux_remote_workspace_id": fixture.owningWorkspace.id.uuidString,
+        ])
+        guard case .ok(let wrongOwnerPayload) = wrongOwnerResult,
+              let wrongOwner = wrongOwnerPayload as? [String: Any] else {
+            Issue.record("Expected owner-scoped no-op, got \(wrongOwnerResult)")
+            return
+        }
+        #expect(wrongOwner["ended"] as? Bool == false)
+        #expect(fixture.store.notifications.contains { $0.id == notification.id })
+
+        let endResult = TerminalController.shared.v2FeedTransientAttentionEnd(params: [
+            "source": "claude",
+            "session_id": sessionId,
+            "all_requests": true,
+            "_cmux_remote_workspace_id": fixture.claimedWorkspace.id.uuidString,
+        ])
+        guard case .ok(let endPayload) = endResult,
+              let end = endPayload as? [String: Any] else {
+            Issue.record("Expected session-wide relay attention release, got \(endResult)")
+            return
+        }
+        #expect(end["ended"] as? Bool == true)
+        TerminalMutationBus.shared.drainForTesting()
+        #expect(!fixture.store.notifications.contains { $0.id == notification.id })
+    }
+
+    @Test(arguments: ["feed.attention.begin", "feed.attention.end"])
+    func testRelayStampsTransientAttentionOwner(method: String) throws {
+        let authenticatedWorkspaceId = UUID()
+        let request: [String: Any] = [
+            "id": "relay-attention",
+            "method": method,
+            "params": [
+                "source": "claude",
+                "session_id": "relay-session",
+                "request_id": "relay-request",
+                "_cmux_remote_workspace_id": UUID().uuidString,
+            ],
+        ]
+        let rewritten = WorkspaceRemoteRelayCommandRewriter(
+            remoteWorkspaceID: authenticatedWorkspaceId,
+            remoteRelayTokenHex: String(repeating: "a", count: 64)
+        ).rewriteRemoteRelayCommandLine(
+            try JSONSerialization.data(withJSONObject: request),
+            workspaceAliases: [:],
+            surfaceAliases: [:]
+        )
+        let rewrittenRequest = try #require(
+            JSONSerialization.jsonObject(with: rewritten) as? [String: Any]
+        )
+        let params = try #require(rewrittenRequest["params"] as? [String: Any])
+
+        #expect(
+            params["_cmux_remote_workspace_id"] as? String
+                == authenticatedWorkspaceId.uuidString
+        )
     }
 
     @Test

@@ -1965,6 +1965,7 @@ extension Workspace {
     private func notificationSnapshots(surfaceId: UUID?) -> [SessionNotificationSnapshot] {
         AppDelegate.shared?.notificationStore?
             .notifications(forTabId: id, surfaceId: surfaceId)
+            .filter(\.persistsInSessionSnapshot)
             .map(SessionNotificationSnapshot.init(notification:)) ?? []
     }
 
@@ -6729,6 +6730,12 @@ final class Workspace: Identifiable, ObservableObject {
         recordLifecycleTombstone: Bool = true,
         livenessExcludingSurfaceId: UUID? = nil
     ) -> Bool {
+        func finish(_ didEnd: Bool) -> Bool {
+            if didEnd {
+                FeedCoordinator.shared.endTransientBlockingAttention(surfaceId: surfaceId)
+            }
+            return didEnd
+        }
         if let terminalLifecycleID, !terminalLifecycleAlreadyValidated {
             guard let terminalPanel = panels[surfaceId] as? TerminalPanel,
                   terminalPanel.surface.terminalLifecycleId == terminalLifecycleID else {
@@ -6776,7 +6783,7 @@ final class Workspace: Identifiable, ObservableObject {
         if cleanupTransferredRemoteConnectionIfNeeded(surfaceId: surfaceId, relayPort: relayPort) {
             invalidateReportedSurfaceTTYRuntime(panelId: surfaceId)
             surfaceRegistry.remoteTTYReportOriginWorkspaceIDs.removeValue(forKey: surfaceId)
-            return true
+            return finish(true)
         }
         guard let configuration = remoteConfiguration,
               remoteTerminalSessionEndMatchesCurrentConfiguration(
@@ -6790,7 +6797,7 @@ final class Workspace: Identifiable, ObservableObject {
                 invalidateReportedSurfaceTTYRuntime(panelId: surfaceId)
                 surfaceRegistry.remoteTTYReportOriginWorkspaceIDs.removeValue(forKey: surfaceId)
             }
-            return didEnd
+            return finish(didEnd)
         }
         invalidateReportedSurfaceTTYRuntime(panelId: surfaceId)
         let preservesRemotePTYSession = configuration.preserveAfterTerminalExit
@@ -6806,14 +6813,14 @@ final class Workspace: Identifiable, ObservableObject {
         }
         notifyPresentedCurrentDirectoryChanged(from: previousPresentedDirectory, force: removedTrustedDirectory)
         if activeRemoteTerminalSurfaceIds.isEmpty {
-            guard !preservesRemotePTYSession else { return true }
+            guard !preservesRemotePTYSession else { return finish(true) }
             if hasAuthoritativelyConnectedRemoteTerminal(
                 in: DockSplitStore.liveRemoteTerminalStores(
                     presentationWorkspaceID: id
                 ),
                 excludingSurfaceId: livenessExcludingSurfaceId
             ) {
-                return true
+                return finish(true)
             }
             let shouldCleanupControlMaster =
                 configuration.relayPort != nil &&
@@ -6828,7 +6835,7 @@ final class Workspace: Identifiable, ObservableObject {
         } else if !deferPresentationReconciliationUntilDockCommit {
             reconcileRemoteTerminalPresentationAfterSessionEnd()
         }
-        return true
+        return finish(true)
     }
 
     func teardownRemoteConnection() {

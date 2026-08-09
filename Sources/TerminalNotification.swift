@@ -1,6 +1,8 @@
 import Foundation
 
 struct TerminalNotification: Identifiable, Hashable, Sendable {
+    static let transientAgentAttentionCorrelationPrefix = "transient-agent-attention:"
+
     let id: UUID
     let tabId: UUID
     let surfaceId: UUID?
@@ -54,6 +56,12 @@ struct TerminalNotification: Identifiable, Hashable, Sendable {
             return surfaceId == nil && panelId == nil
         }
         return surfaceId == targetSurfaceId || panelId == targetSurfaceId
+    }
+
+    /// Transient blocker ownership lives only in FeedCoordinator memory and
+    /// cannot be reconstructed safely after an app restart.
+    var persistsInSessionSnapshot: Bool {
+        correlationKey?.hasPrefix(Self.transientAgentAttentionCorrelationPrefix) != true
     }
 
     /// Matches a clear without letting live-owner expansion cross a confined notification's workspace boundary.
