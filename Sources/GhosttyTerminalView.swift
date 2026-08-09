@@ -5665,6 +5665,11 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         }
     }
 
+    /// Records conservative composer ownership after Ghostty accepts a control key.
+    func recordPromptOwnershipAfterAcceptedGhosttyKey(_ keyEvent: ghostty_input_key_s) {
+        terminalSurface?.recordHumanPromptInput(.unknown)
+    }
+
     override func keyDown(with event: NSEvent) {
         terminalSurface?.didReceiveExplicitInput()
 #if DEBUG
@@ -5829,12 +5834,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             // If not (e.g. `ignore` keybind), fall through to interpretKeyEvents
             // so the IME gets a chance to process this event.
             if handled {
-                if let terminalSurface {
-                    // Ghostty bindings are agent/config-specific. Even Ctrl-C
-                    // or Escape may mutate a composer, so only a structured
-                    // submit hook or process-identity change can clear this.
-                    terminalSurface.recordHumanPromptInput(.unknown)
-                }
+                recordPromptOwnershipAfterAcceptedGhosttyKey(keyEvent)
                 return
             }
         }
