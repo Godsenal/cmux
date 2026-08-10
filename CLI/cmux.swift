@@ -24801,6 +24801,12 @@ struct CMUXCLI {
                 fallbackPID: claudePid
             )
             let isClearSessionStart = isClaudeClearSessionStart(parsedInput)
+            let displacedBlockingAttentionSessionId = isClearSessionStart
+                ? try? sessionStore.activeBlockingAttentionSessionId(
+                    workspaceId: workspaceId,
+                    surfaceId: surfaceId
+                )
+                : nil
             let canReplaceStoppedSession = shouldReplaceStoppedClaudeSession(
                 sessionStore: sessionStore,
                 parsedInput: parsedInput,
@@ -24867,6 +24873,13 @@ struct CMUXCLI {
                 )
             }
             if isClearSessionStart, !suppressVisibleMutations {
+                if let sessionId = displacedBlockingAttentionSessionId
+                    ?? parsedInput.sessionId {
+                    endClaudeBlockingAttentionForTurnBoundary(
+                        client: client,
+                        sessionId: sessionId
+                    )
+                }
                 _ = try? sendV1Command("clear_notifications --tab=\(workspaceId)\(socketPanelOption(surfaceId))", client: client)
                 setAgentLifecycle(
                     client: client,

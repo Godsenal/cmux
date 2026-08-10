@@ -24,6 +24,35 @@ extension ClaudeHookSessionStore {
 
     private static let maximumBlockingToolCorrelationCount = 256
 
+    /// Returns the session displaced by a pane-scoped active-session boundary.
+    /// Legacy workspace-only slots are accepted only when their recorded pane
+    /// matches, so cleanup cannot release attention owned by a sibling split.
+    func activeBlockingAttentionSessionId(
+        workspaceId: String,
+        surfaceId: String?
+    ) throws -> String? {
+        guard let workspaceId = normalizedBlockingToolIdentifier(workspaceId) else {
+            return nil
+        }
+        let surfaceId = normalizedBlockingToolIdentifier(surfaceId)
+        return try withLockedState { state in
+            if let surfaceId,
+               let active = state.activeSessionsBySurface[surfaceId] {
+                return active.sessionId
+            }
+            guard let active = state.activeSessionsByWorkspace[workspaceId] else {
+                return nil
+            }
+            if let surfaceId {
+                guard let record = state.sessions[active.sessionId],
+                      normalizedBlockingToolIdentifier(record.surfaceId) == surfaceId else {
+                    return nil
+                }
+            }
+            return active.sessionId
+        }
+    }
+
     /// Atomically records a blocking Claude tool and its Needs input lifecycle.
     /// Hooks without Claude's `tool_use_id` receive a durable synthetic request
     /// ID so concurrent legacy blockers still own distinct transient attention.
