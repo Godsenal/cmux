@@ -298,6 +298,7 @@ def main() -> int:
                 "-only-testing:cmuxTests/CLISSHSessionAttachAnchorTests",
                 "-only-testing:cmuxTests/GhosttyOptionAsAltModsTests",
                 "-only-testing:cmuxTests/RemoteTmuxMirrorLayoutIdentityTests",
+                "-only-testing:cmuxTests/SleepyPowerControlsLockTests",
             ):
                 if focused_selector in shard_selectors:
                     print(f"FAIL: focused gate selector should not be folded into shard: {focused_selector}")

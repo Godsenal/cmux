@@ -39,6 +39,7 @@ FOCUSED_GATE_SELECTORS = {
     "cmuxTests/CLISSHSessionAttachAnchorTests",
     "cmuxTests/GhosttyOptionAsAltModsTests",
     "cmuxTests/RemoteTmuxMirrorLayoutIdentityTests",
+    "cmuxTests/SleepyPowerControlsLockTests",
 }
 # BrowserDeveloperToolsVisibilityPersistenceTests reliably crash-restarts the
 # app host on CI runners (its detached-inspector tests kill the host mid-run;
