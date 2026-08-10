@@ -23,7 +23,7 @@ extension ClaudeHookWriteAmplificationTests {
         let serverHandled = SessionResetHarness.startDeliveryTargetServer(
             context: context,
             surfacesByWorkspace: [workspaceId: [surfaceId]],
-            pidTarget: nil,
+            pidTarget: (workspaceId: workspaceId, surfaceId: surfaceId),
             surfaceTargets: [surfaceId: workspaceId]
         )
         var environment = SessionResetHarness.hookEnvironment(context: context)
