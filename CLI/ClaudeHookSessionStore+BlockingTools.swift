@@ -110,6 +110,7 @@ extension ClaudeHookSessionStore {
     /// Selects the durable request that a completion must release without
     /// consuming it. The caller removes attention first, then commits the
     /// matching state transition only after the app acknowledges that release.
+    /// Missing sessions are ignored rather than treated as legacy records.
     func selectBlockingToolInput(
         sessionId: String,
         toolUseId: String?,
@@ -117,11 +118,13 @@ extension ClaudeHookSessionStore {
     ) throws -> BlockingToolSelection {
         let explicitRequestId = normalizedBlockingToolIdentifier(toolUseId)
         guard let sessionId = normalizedBlockingToolIdentifier(sessionId) else {
-            return .selected(requestId: explicitRequestId)
+            return .ignoreUnmatched
         }
         return try withLockedState { state in
-            guard let record = state.sessions[sessionId],
-                  let storedPending = record.pendingBlockingToolUseIds else {
+            guard let record = state.sessions[sessionId] else {
+                return .ignoreUnmatched
+            }
+            guard let storedPending = record.pendingBlockingToolUseIds else {
                 // Records written before correlation use the shared legacy key.
                 return .selected(requestId: explicitRequestId)
             }
@@ -140,7 +143,8 @@ extension ClaudeHookSessionStore {
     /// Atomically resolves only the matching blocking tool. A non-nil pending
     /// array enables correlated completion, including an empty array retained
     /// as a tombstone so a later duplicate PostToolUse cannot fall back to the
-    /// legacy session-wide path. Records predating correlation keep `nil`.
+    /// legacy session-wide path. Records predating correlation keep `nil`;
+    /// records removed after selection are not recreated during resolution.
     func resolveBlockingToolInput(
         sessionId: String,
         workspaceId: String,
@@ -150,17 +154,13 @@ extension ClaudeHookSessionStore {
         toolUseId: String?
     ) throws -> BlockingToolResolution {
         guard let sessionId = normalizedBlockingToolIdentifier(sessionId) else {
-            return .resolved
+            return .ignoreUnmatched
         }
         return try withLockedState { state in
             let now = Date.now.timeIntervalSince1970
-            var record = state.sessions[sessionId] ?? ClaudeHookSessionRecord(
-                sessionId: sessionId,
-                workspaceId: workspaceId,
-                surfaceId: surfaceId,
-                startedAt: now,
-                updatedAt: now
-            )
+            guard var record = state.sessions[sessionId] else {
+                return .ignoreUnmatched
+            }
 
             let resolution = resolveBlockingTool(
                 in: &record,
