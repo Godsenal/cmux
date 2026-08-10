@@ -159,59 +159,54 @@ final class CLINotifyProcessIntegrationRegressionTests: XCTestCase {
     // Notification, so the targeted PreToolUse handler is the only needs-input signal.
     // ExitPlanMode had no needs-input branch, so it fell through to the generic
     // ".running" tail and a tab blocked on plan approval looked busy and stayed
-    // silent. It must flag Needs input (lifecycle + status + bell), never Running.
+    // silent. It must persist Needs input and acquire request-scoped Feed
+    // attention, never fall back to legacy pane-wide status mutations.
     func testClaudePreToolUseExitPlanModeFlagsNeedsInputUnderSkipPermissions() throws {
         let context = try makeClaudeHookContext(name: "claude-pretool-exitplan")
         defer { context.cleanup() }
+        let processIdentity = try XCTUnwrap(AgentPIDProcessIdentity(
+            pid: ProcessInfo.processInfo.processIdentifier
+        ))
 
         let result = runClaudeHook(
             context: context,
             arguments: ["hooks", "claude", "pre-tool-use"],
             // Use ##"…"## delimiters: the plan text contains `"#`, which would
             // otherwise close a #"…"# raw string early.
-            standardInput: ##"{"session_id":"exitplan-session","cwd":"\##(context.root.path)","permission_mode":"bypassPermissions","hook_event_name":"PreToolUse","tool_name":"ExitPlanMode","tool_input":{"plan":"# Plan: echo hi\n\n## Step\n1. Run echo hi"}}"##
+            standardInput: ##"{"session_id":"exitplan-session","cwd":"\##(context.root.path)","permission_mode":"bypassPermissions","hook_event_name":"PreToolUse","tool_name":"ExitPlanMode","tool_input":{"plan":"# Plan: echo hi\n\n## Step\n1. Run echo hi"}}"##,
+            extraEnvironment: ["CMUX_CLAUDE_PID": String(processIdentity.pid)]
         )
 
         XCTAssertFalse(result.timedOut, result.stderr)
         XCTAssertEqual(result.status, 0, result.stderr)
 
-        XCTAssertTrue(
-            context.state.commands.contains {
-                $0.hasPrefix("set_agent_lifecycle claude_code needsInput --tab=\(context.workspaceId)")
-                    && $0.contains("--panel=\(context.surfaceId)")
-            },
-            "ExitPlanMode PreToolUse must drive Needs input, saw \(context.state.commands)"
-        )
         XCTAssertFalse(
-            context.state.commands.contains { $0.contains("set_agent_lifecycle claude_code running") },
-            "ExitPlanMode PreToolUse must not drive Running while blocked on plan approval, saw \(context.state.commands)"
-        )
-        XCTAssertFalse(
-            context.state.commands.contains { $0.hasPrefix("set_status claude_code Running ") },
-            "ExitPlanMode PreToolUse must not set a Running status while blocked on plan approval, saw \(context.state.commands)"
-        )
-        // Assert on the bell icon rather than the status text, which is localized.
-        XCTAssertTrue(
-            context.state.commands.contains {
-                $0.hasPrefix("set_status claude_code ")
-                    && $0.contains("--icon=bell.fill")
-                    && $0.contains("--panel=\(context.surfaceId)")
+            context.state.commands.contains { command in
+                command.hasPrefix("set_agent_lifecycle claude_code ")
+                    || command.hasPrefix("set_status claude_code ")
+                    || command.hasPrefix("notify_target")
             },
-            "ExitPlanMode under bypassPermissions must publish a needs-input (bell) status (no PermissionRequest/Notification follows), saw \(context.state.commands)"
-        )
-        XCTAssertTrue(
-            context.state.commands.contains {
-                $0.hasPrefix("notify_target_async \(context.workspaceId) \(context.surfaceId) ")
-            },
-            "ExitPlanMode under bypassPermissions must ring the needs-input notification, saw \(context.state.commands)"
+            "ExitPlanMode PreToolUse must not emit legacy pane-wide mutations, saw \(context.state.commands)"
         )
 
         let record = try readClaudeHookSession("exitplan-session", context: context)
         XCTAssertEqual(record["agentLifecycle"] as? String, "needsInput")
+        let pendingRequestIds = try XCTUnwrap(record["pendingBlockingToolUseIds"] as? [String])
+        let requestId = try XCTUnwrap(pendingRequestIds.first)
+        XCTAssertEqual(pendingRequestIds.count, 1)
         XCTAssertEqual(
             (record["lastBody"] as? String)?.contains("echo hi"), true,
             "Expected the saved needs-input body to summarize the plan, saw \(record["lastBody"] ?? "nil")"
         )
+        let beginParams = try XCTUnwrap(
+            context.state.commands.compactMap(jsonObject).first {
+                $0["method"] as? String == "feed.attention.begin"
+            }?["params"] as? [String: Any]
+        )
+        XCTAssertEqual(beginParams["request_id"] as? String, requestId)
+        XCTAssertEqual(beginParams["workspace_id"] as? String, context.workspaceId)
+        XCTAssertEqual(beginParams["surface_id"] as? String, context.surfaceId)
+        XCTAssertEqual(beginParams["ppid"] as? Int, Int(processIdentity.pid))
     }
 
     // https://github.com/manaflow-ai/cmux/issues/6606
@@ -220,63 +215,58 @@ final class CLINotifyProcessIntegrationRegressionTests: XCTestCase {
     // (confirmed: tool_name=AskUserQuestion, permission_mode=bypassPermissions) but
     // PermissionRequest and Notification do not. The pre-existing branch set only the
     // lifecycle, so the sidebar kept the prior "Running" status text and no bell rang.
-    // In bypass mode this handler must publish the full Needs-input state.
+    // In bypass mode this handler must persist the blocker and acquire request-scoped
+    // Feed attention without writing legacy pane-wide state.
     func testClaudePreToolUseAskUserQuestionFlagsNeedsInputUnderSkipPermissions() throws {
         let context = try makeClaudeHookContext(name: "claude-pretool-askquestion")
         defer { context.cleanup() }
+        let processIdentity = try XCTUnwrap(AgentPIDProcessIdentity(
+            pid: ProcessInfo.processInfo.processIdentifier
+        ))
 
         let result = runClaudeHook(
             context: context,
             arguments: ["hooks", "claude", "pre-tool-use"],
-            standardInput: #"{"session_id":"askquestion-session","cwd":"\#(context.root.path)","permission_mode":"bypassPermissions","hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which color?","header":"Color","options":[{"label":"Red"},{"label":"Blue"}]}]}}"#
+            standardInput: #"{"session_id":"askquestion-session","cwd":"\#(context.root.path)","permission_mode":"bypassPermissions","hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which color?","header":"Color","options":[{"label":"Red"},{"label":"Blue"}]}]}}"#,
+            extraEnvironment: ["CMUX_CLAUDE_PID": String(processIdentity.pid)]
         )
 
         XCTAssertFalse(result.timedOut, result.stderr)
         XCTAssertEqual(result.status, 0, result.stderr)
 
-        XCTAssertTrue(
-            context.state.commands.contains {
-                $0.hasPrefix("set_agent_lifecycle claude_code needsInput --tab=\(context.workspaceId)")
-                    && $0.contains("--panel=\(context.surfaceId)")
-            },
-            "AskUserQuestion PreToolUse must drive Needs input, saw \(context.state.commands)"
-        )
         XCTAssertFalse(
-            context.state.commands.contains { $0.contains("set_agent_lifecycle claude_code running") },
-            "AskUserQuestion PreToolUse must not drive Running, saw \(context.state.commands)"
-        )
-        XCTAssertFalse(
-            context.state.commands.contains { $0.hasPrefix("set_status claude_code Running ") },
-            "AskUserQuestion PreToolUse must not set a Running status, saw \(context.state.commands)"
-        )
-        // Assert on the bell icon rather than the status text, which is localized.
-        XCTAssertTrue(
-            context.state.commands.contains {
-                $0.hasPrefix("set_status claude_code ")
-                    && $0.contains("--icon=bell.fill")
-                    && $0.contains("--panel=\(context.surfaceId)")
+            context.state.commands.contains { command in
+                command.hasPrefix("set_agent_lifecycle claude_code ")
+                    || command.hasPrefix("set_status claude_code ")
+                    || command.hasPrefix("notify_target")
             },
-            "AskUserQuestion under bypassPermissions must publish a needs-input (bell) status, saw \(context.state.commands)"
-        )
-        XCTAssertTrue(
-            context.state.commands.contains {
-                $0.hasPrefix("notify_target_async \(context.workspaceId) \(context.surfaceId) ")
-            },
-            "AskUserQuestion under bypassPermissions must ring the needs-input notification, saw \(context.state.commands)"
+            "AskUserQuestion PreToolUse must not emit legacy pane-wide mutations, saw \(context.state.commands)"
         )
 
         let record = try readClaudeHookSession("askquestion-session", context: context)
         XCTAssertEqual(record["agentLifecycle"] as? String, "needsInput")
+        let pendingRequestIds = try XCTUnwrap(record["pendingBlockingToolUseIds"] as? [String])
+        let requestId = try XCTUnwrap(pendingRequestIds.first)
+        XCTAssertEqual(pendingRequestIds.count, 1)
         XCTAssertEqual(
             (record["lastBody"] as? String)?.contains("Which color"), true,
             "Expected the saved needs-input body to carry the question text, saw \(record["lastBody"] ?? "nil")"
         )
+        let beginParams = try XCTUnwrap(
+            context.state.commands.compactMap(jsonObject).first {
+                $0["method"] as? String == "feed.attention.begin"
+            }?["params"] as? [String: Any]
+        )
+        XCTAssertEqual(beginParams["request_id"] as? String, requestId)
+        XCTAssertEqual(beginParams["workspace_id"] as? String, context.workspaceId)
+        XCTAssertEqual(beginParams["surface_id"] as? String, context.surfaceId)
+        XCTAssertEqual(beginParams["ppid"] as? Int, Int(processIdentity.pid))
     }
 
     // In modes where a PermissionRequest/Notification hook still follows (anything
-    // other than bypassPermissions), the PreToolUse handler must flag the needs-input
-    // lifecycle but leave the status/bell to that following hook, so the user is not
-    // double-notified. It still must never fall through to the Running tail.
+    // other than bypassPermissions), the PreToolUse handler records the blocker but
+    // leaves visible attention to that following hook, so the user is not
+    // double-notified. It must not issue direct lifecycle/status/notification writes.
     func testClaudePreToolUseAskUserQuestionDefersBellWhenPermissionRequestWillFollow() throws {
         let context = try makeClaudeHookContext(name: "claude-pretool-askquestion-default")
         defer { context.cleanup() }
@@ -290,28 +280,28 @@ final class CLINotifyProcessIntegrationRegressionTests: XCTestCase {
         XCTAssertFalse(result.timedOut, result.stderr)
         XCTAssertEqual(result.status, 0, result.stderr)
 
-        XCTAssertTrue(
-            context.state.commands.contains {
-                $0.hasPrefix("set_agent_lifecycle claude_code needsInput --tab=\(context.workspaceId)")
+        XCTAssertFalse(
+            context.state.commands.contains { command in
+                command.hasPrefix("set_agent_lifecycle claude_code ")
+                    || command.hasPrefix("set_status claude_code ")
+                    || command.hasPrefix("notify_target")
             },
-            "AskUserQuestion PreToolUse must drive Needs input in every mode, saw \(context.state.commands)"
+            "AskUserQuestion must defer visible attention to the following hook, saw \(context.state.commands)"
         )
         XCTAssertFalse(
-            context.state.commands.contains { $0.contains("set_agent_lifecycle claude_code running") },
-            "AskUserQuestion PreToolUse must not drive Running, saw \(context.state.commands)"
-        )
-        XCTAssertFalse(
-            context.state.commands.contains { $0.hasPrefix("notify_target_async ") },
-            "AskUserQuestion must defer the bell to the following Notification hook outside bypassPermissions, saw \(context.state.commands)"
-        )
-        // The needs-input status (bell.fill) is part of the deferred bell path, so
-        // it must not be set directly here either — only the lifecycle is.
-        XCTAssertFalse(
-            context.state.commands.contains {
-                $0.hasPrefix("set_status claude_code ") && $0.contains("--icon=bell.fill")
+            context.state.commands.compactMap(jsonObject).contains {
+                $0["method"] as? String == "feed.attention.begin"
             },
-            "AskUserQuestion in default mode must defer the Needs input status to the following hook, saw \(context.state.commands)"
+            "PermissionRequest owns visible attention outside bypassPermissions"
         )
+        let event = try XCTUnwrap(
+            feedPushEvents(in: context).last { $0["hook_event_name"] as? String == "PreToolUse" }
+        )
+        XCTAssertEqual(event["workspace_id"] as? String, context.workspaceId)
+        XCTAssertEqual(event["surface_id"] as? String, context.surfaceId)
+        let record = try readClaudeHookSession("askquestion-default-session", context: context)
+        XCTAssertEqual(record["agentLifecycle"] as? String, "needsInput")
+        XCTAssertEqual((record["pendingBlockingToolUseIds"] as? [String])?.count, 1)
     }
 
     func testCodexStopReadsOversizedFinalTranscriptLine() throws {
