@@ -432,7 +432,7 @@ extension ClaudeHookWriteAmplificationTests {
         #expect(serverHandled.wait(timeout: .now() + 5) == .success)
         #expect(!result.timedOut, Comment(rawValue: result.stderr))
         #expect(result.status == 0, Comment(rawValue: result.stderr))
-        #expect(result.stdout == "OK\n")
+        #expect(result.stdout == "{}\n")
         #expect(
             !context.state.snapshot().contains { command in
                 guard let data = command.data(using: .utf8),
