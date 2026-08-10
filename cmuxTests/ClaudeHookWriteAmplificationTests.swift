@@ -361,4 +361,73 @@ struct ClaudeHookWriteAmplificationTests {
         #expect(record?["pendingBlockingToolUseIds"] as? [String] == [])
     }
 
+    @Test func blockingCompletionCannotRecreateConsumedSession() throws {
+        let context = try Harness.makeContext(name: "consumed-blocking-session")
+        defer { context.cleanup() }
+        let sessionId = "consumed-blocking-session"
+        let workspaceId = "11111111-1111-1111-1111-111111111111"
+        let surfaceId = "22222222-2222-2222-2222-222222222222"
+        try Harness.writeSessionStore(
+            to: context.storeURL,
+            sessionId: sessionId,
+            workspaceId: workspaceId,
+            surfaceId: surfaceId,
+            cwd: context.root.path
+        )
+
+        let serverHandled = Harness.startDeliveryTargetServer(
+            context: context,
+            surfacesByWorkspace: [workspaceId: [surfaceId]],
+            pidTarget: nil,
+            surfaceTargets: [surfaceId: workspaceId],
+            purgeSessionStoreOnFeedAttentionEnd: true
+        )
+        var environment = Harness.hookEnvironment(context: context)
+        environment["CMUX_WORKSPACE_ID"] = workspaceId
+        environment["CMUX_SURFACE_ID"] = surfaceId
+
+        func runCompletion(sessionId: String, toolUseId: String) -> [String] {
+            let commandStart = context.state.snapshot().count
+            let result = Harness.runHookProcess(
+                context: context,
+                arguments: ["hooks", "claude", "input-resolved"],
+                environment: environment,
+                standardInput: #"{"session_id":"\#(sessionId)","hook_event_name":"PostToolUse","tool_name":"AskUserQuestion","tool_use_id":"\#(toolUseId)","cwd":"\#(context.root.path)"}"#
+            )
+            #expect(serverHandled.wait(timeout: .now() + 5) == .success)
+            #expect(!result.timedOut, Comment(rawValue: result.stderr))
+            #expect(result.status == 0, Comment(rawValue: result.stderr))
+            #expect(result.stdout == "{}\n")
+            return Array(context.state.snapshot().dropFirst(commandStart))
+        }
+
+        let consumedCommands = runCompletion(
+            sessionId: sessionId,
+            toolUseId: "legacy-tool"
+        )
+        #expect(
+            consumedCommands.contains { $0.contains(#""method":"feed.attention.end""#) },
+            "the seeded legacy record must be selected before the simulated purge"
+        )
+        #expect(
+            try Harness.sessionRecord(in: context.storeURL, sessionId: sessionId) == nil,
+            "resolution must not recreate a session consumed while attention ends"
+        )
+
+        let missingCommands = runCompletion(
+            sessionId: "missing-session",
+            toolUseId: "unknown-tool"
+        )
+        #expect(
+            !missingCommands.contains { $0.contains(#""method":"feed.attention.end""#) },
+            "an unknown completion must not release attention without a durable owner"
+        )
+        #expect(
+            try Harness.sessionRecord(
+                in: context.storeURL,
+                sessionId: "missing-session"
+            ) == nil
+        )
+    }
+
 }
