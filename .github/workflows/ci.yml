@@ -699,6 +699,19 @@ jobs:
             -only-testing:cmuxTests/CmuxBundledBinPathIntegrationTests \
             test
 
+      - name: Run shell socket capability regression
+        if: ${{ matrix.shard == fromJSON(env.CMUX_APP_HOST_FOCUSED_REGRESSION_SHARD) }}
+        run: |
+          # Keep this non-tolerant regression near the fish setup above. When it
+          # ran in the late CLI batch, earlier xcodebuild output could exhaust
+          # the job log before GitHub recorded its failure details.
+          set -euo pipefail
+          command -v fish >/dev/null 2>&1 || {
+            echo "fish is required for the issue #9075 shell socket regression" >&2
+            exit 1
+          }
+          python3 tests/test_issue_9075_shell_socket_reports.py
+
       - name: Run agent chat transcript lifecycle regressions
         if: ${{ matrix.shard == fromJSON(env.CMUX_APP_HOST_FOCUSED_REGRESSION_SHARD) }}
         run: |
@@ -1230,14 +1243,6 @@ jobs:
           python3 tests/test_issue_8953_zsh_prompt_wrap_guard.py
           python3 tests/test_shell_git_branch_stale_cwd.py
           python3 tests/test_shell_git_config_remote_url_parsing.py
-          if ! command -v fish >/dev/null 2>&1; then
-            HOMEBREW_NO_AUTO_UPDATE=1 brew install fish
-          fi
-          command -v fish >/dev/null 2>&1 || {
-            echo "fish is required for the issue #9075 shell socket regression" >&2
-            exit 1
-          }
-          python3 tests/test_issue_9075_shell_socket_reports.py
           CMUX_CLI_BIN="$CLI_BIN" python3 tests/test_claude_hook_stop_last_assistant.py
           CMUX_CLI_BIN="$CLI_BIN" python3 tests/test_claude_hook_clear_running_status.py
           CMUX_CLI_BIN="$CLI_BIN" python3 tests/test_claude_hook_push_notification.py
