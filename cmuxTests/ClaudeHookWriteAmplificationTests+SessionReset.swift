@@ -71,4 +71,71 @@ extension ClaudeHookWriteAmplificationTests {
                 && params["all_requests"] as? Bool == true
         }, "a clear boundary must release blockers owned by the displaced session")
     }
+
+    @Test func bypassAttentionRequiresDurableBlockingToolRegistration() throws {
+        let context = try SessionResetHarness.makeContext(name: "failed-blocker-registration")
+        defer { context.cleanup() }
+
+        let workspaceId = "11111111-1111-1111-1111-111111111111"
+        let surfaceId = "22222222-2222-2222-2222-222222222222"
+        let sessionId = "failed-blocker-registration-session"
+        let processIdentity = try #require(AgentPIDProcessIdentity(
+            pid: ProcessInfo.processInfo.processIdentifier
+        ))
+        try SessionResetHarness.writeSessionStore(
+            to: context.storeURL,
+            sessionId: sessionId,
+            workspaceId: workspaceId,
+            surfaceId: surfaceId,
+            cwd: context.root.path,
+            processIdentity: processIdentity
+        )
+
+        let storeURL = context.storeURL
+        let serverHandled = SessionResetHarness.startDeliveryTargetServer(
+            context: context,
+            surfacesByWorkspace: [workspaceId: [surfaceId]],
+            pidTarget: nil,
+            surfaceTargets: [surfaceId: workspaceId],
+            beforeSurfaceResolutionResponse: {
+                let fileManager = FileManager()
+                try? fileManager.removeItem(at: storeURL)
+                try? fileManager.createDirectory(
+                    at: storeURL,
+                    withIntermediateDirectories: false
+                )
+            }
+        )
+        var environment = SessionResetHarness.hookEnvironment(context: context)
+        environment["CMUX_WORKSPACE_ID"] = workspaceId
+        environment["CMUX_SURFACE_ID"] = surfaceId
+        environment["CMUX_CLAUDE_PID"] = String(processIdentity.pid)
+
+        let result = SessionResetHarness.runHookProcess(
+            context: context,
+            arguments: ["hooks", "claude", "pre-tool-use"],
+            environment: environment,
+            standardInput: #"{"session_id":"\#(sessionId)","hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_use_id":"unregistered-question","permission_mode":"bypassPermissions","cwd":"\#(context.root.path)"}"#
+        )
+
+        #expect(serverHandled.wait(timeout: .now() + 5) == .success)
+        #expect(!result.timedOut, Comment(rawValue: result.stderr))
+        #expect(result.status == 0, Comment(rawValue: result.stderr))
+        #expect(result.stdout == "{}\n")
+        var isDirectory: ObjCBool = false
+        #expect(
+            FileManager.default.fileExists(atPath: storeURL.path, isDirectory: &isDirectory)
+                && isDirectory.boolValue,
+            "the fixture must make durable blocker registration fail"
+        )
+        #expect(
+            !context.state.snapshot().contains { command in
+                guard let data = command.data(using: .utf8),
+                      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                else { return false }
+                return object["method"] as? String == "feed.attention.begin"
+            },
+            "attention without a durable blocker cannot be correlated or released"
+        )
+    }
 }

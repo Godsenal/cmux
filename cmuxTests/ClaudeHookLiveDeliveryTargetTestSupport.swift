@@ -96,6 +96,7 @@ enum ClaudeHookLiveDeliveryHarness {
         resumeClearOwnsCheckpoint: Bool? = true,
         feedAttentionEndSucceeds: Bool = true,
         purgeSessionStoreOnFeedAttentionEnd: Bool = false,
+        beforeSurfaceResolutionResponse: (@Sendable () -> Void)? = nil,
         feedExitPlanModesByRequestId: [String: String] = [:],
         feedTerminalStatusesByRequestId: [String: String] = [:],
         feedExitPlanModesByPlan: [String: String] = [:],
@@ -129,6 +130,7 @@ enum ClaudeHookLiveDeliveryHarness {
                 }
                 if let surfaceId = params["surface_id"] as? String,
                    let workspaceId = surfaceTargets[surfaceId] {
+                    beforeSurfaceResolutionResponse?()
                     return v2Response(id: id, ok: true, result: [
                         "workspace_id": workspaceId,
                         "surface_id": surfaceId,
