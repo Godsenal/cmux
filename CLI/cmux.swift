@@ -11187,7 +11187,10 @@ struct CMUXCLI {
         }
         try passwordData.write(to: passwordURL, options: .atomic)
         _ = chmod(passwordURL.path, S_IRUSR | S_IWUSR)
-        let runner = sshAskpassExecShellScript(passwordFilePath: passwordURL.path, cleanupDirectory: dirURL.path)
+        let runner = SSHAskpassExecShellScript(
+            passwordFilePath: passwordURL.path,
+            cleanupDirectory: dirURL.path
+        ).text
         try runner.write(to: runnerURL, atomically: true, encoding: .utf8)
         _ = chmod(runnerURL.path, S_IRWXU)
         return runnerURL.path
