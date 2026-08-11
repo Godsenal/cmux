@@ -298,7 +298,9 @@ enum ClaudeHookLiveDeliveryHarness {
             process.waitUntilExit()
             exitSignal.signal()
         }
-        let timedOut = exitSignal.wait(timeout: .now() + 10) == .timedOut
+        // SocketClient allows a response up to 15 seconds; the harness must not
+        // terminate a best-effort hook before its own bounded operation expires.
+        let timedOut = exitSignal.wait(timeout: .now() + 20) == .timedOut
         if timedOut {
             process.terminate()
             if exitSignal.wait(timeout: .now() + 1) == .timedOut {
