@@ -268,66 +268,6 @@ enum ClaudeHookLiveDeliveryHarness {
         return sessions?[sessionId] as? [String: Any]
     }
 
-    static func runHookProcess(
-        context: Context,
-        arguments: [String],
-        environment: [String: String],
-        standardInput: String
-    ) -> ProcessRunResult {
-        let process = Process()
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        let stdinPipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: context.cliPath)
-        process.arguments = arguments
-        process.environment = environment
-        process.standardInput = stdinPipe
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        do {
-            try process.run()
-        } catch {
-            return ProcessRunResult(status: -1, stdout: "", stderr: String(describing: error), timedOut: false)
-        }
-        stdinPipe.fileHandleForWriting.write(Data(standardInput.utf8))
-        try? stdinPipe.fileHandleForWriting.close()
-
-        let exitSignal = DispatchSemaphore(value: 0)
-        DispatchQueue.global(qos: .userInitiated).async {
-            process.waitUntilExit()
-            exitSignal.signal()
-        }
-        // SocketClient allows a response up to 15 seconds; the harness must not
-        // terminate a best-effort hook before its own bounded operation expires.
-        var timedOut = exitSignal.wait(timeout: .now() + 20) == .timedOut
-        // Foundation.Process can publish its exit after the deadline even when
-        // the child has already exited normally. Do not report that notification
-        // race as a hook timeout.
-        if timedOut, !process.isRunning {
-            timedOut = false
-        }
-        if timedOut {
-            process.terminate()
-            if exitSignal.wait(timeout: .now() + 1) == .timedOut {
-                kill(process.processIdentifier, SIGKILL)
-                _ = exitSignal.wait(timeout: .now() + 1)
-            }
-            if !process.isRunning, process.terminationReason == .exit {
-                timedOut = false
-            }
-        }
-
-        let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        return ProcessRunResult(
-            status: process.isRunning ? SIGKILL : process.terminationStatus,
-            stdout: stdout,
-            stderr: stderr,
-            timedOut: timedOut
-        )
-    }
-
     private static func bindUnixSocket(at path: String) throws -> Int32 {
         unlink(path)
         let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
