@@ -34,6 +34,8 @@ Hangul canonical font resolution at `3fbdd078d`.
     integration. A single enabled SSH feature must still install the wrapper.
 - Artifact:
   - https://github.com/manaflow-ai/ghostty/releases/tag/xcframework-a63a9786871c4f98387a02fd05a814e716499099-crashsubdir-cmux-crash-sentry-off-v1
+  - SHA-256 `e5b6ddb8d446fb3b2079ac3011b94c55d2fc9ea1c2eb1eafdfc1a7996ecd7cc3`
+    is pinned in `scripts/ghosttykit-checksums.txt`.
 
 ### VT formatter cursor restoration after margins
 
