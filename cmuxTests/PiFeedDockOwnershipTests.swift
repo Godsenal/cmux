@@ -842,6 +842,75 @@ struct PiFeedDockOwnershipTests {
     }
 
     @MainActor
+    @Test("Dock panel and bulk teardown release transient attention")
+    func dockTeardownReleasesTransientAttention() async throws {
+        try await withAppContext { appDelegate, _, workspace, windowID in
+            let dock = appDelegate.windowDock(forWindowId: windowID)
+            let directlyClosedPanel = try dock.seedPiFeedPanel()
+            let bulkClosedPanel = try dock.seedPiFeedPanel()
+            let processIdentity = try #require(AgentPIDProcessIdentity(
+                pid: ProcessInfo.processInfo.processIdentifier
+            ))
+            let directSessionID = "dock-direct-close-session"
+            let bulkSessionID = "dock-bulk-close-session"
+            let directRequestID = "dock-direct-close-request"
+            let bulkRequestID = "dock-bulk-close-request"
+            defer {
+                _ = FeedCoordinator.shared.endTransientBlockingAttention(
+                    source: "claude",
+                    sessionId: directSessionID,
+                    requestId: directRequestID
+                )
+                _ = FeedCoordinator.shared.endTransientBlockingAttention(
+                    source: "claude",
+                    sessionId: bulkSessionID,
+                    requestId: bulkRequestID
+                )
+                TerminalMutationBus.shared.drainForTesting()
+            }
+
+            #expect(FeedCoordinator.shared.beginTransientBlockingAttention(
+                source: "claude",
+                sessionId: directSessionID,
+                requestId: directRequestID,
+                workspaceId: workspace.id,
+                surfaceId: directlyClosedPanel.id,
+                owner: .localProcess(processIdentity),
+                title: "Direct Dock blocker",
+                subtitle: "Waiting",
+                body: "Waiting for input"
+            ))
+            #expect(FeedCoordinator.shared.beginTransientBlockingAttention(
+                source: "claude",
+                sessionId: bulkSessionID,
+                requestId: bulkRequestID,
+                workspaceId: workspace.id,
+                surfaceId: bulkClosedPanel.id,
+                owner: .localProcess(processIdentity),
+                title: "Bulk Dock blocker",
+                subtitle: "Waiting",
+                body: "Waiting for input"
+            ))
+
+            #expect(dock.closePanel(directlyClosedPanel.id, force: true))
+            #expect(!dock.containsPanel(directlyClosedPanel.id))
+            #expect(!FeedCoordinator.shared.endTransientBlockingAttention(
+                source: "claude",
+                sessionId: directSessionID,
+                requestId: directRequestID
+            ))
+
+            dock.closeAllPanels()
+            #expect(!dock.containsPanel(bulkClosedPanel.id))
+            #expect(!FeedCoordinator.shared.endTransientBlockingAttention(
+                source: "claude",
+                sessionId: bulkSessionID,
+                requestId: bulkRequestID
+            ))
+        }
+    }
+
+    @MainActor
     @Test("Surface-less Feed accepts a live window Dock owner")
     func surfaceLessFeedAcceptsWindowDockOwner() async throws {
         try await withAppContext { appDelegate, _, _, windowID in
