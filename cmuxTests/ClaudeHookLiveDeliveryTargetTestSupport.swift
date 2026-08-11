@@ -300,12 +300,21 @@ enum ClaudeHookLiveDeliveryHarness {
         }
         // SocketClient allows a response up to 15 seconds; the harness must not
         // terminate a best-effort hook before its own bounded operation expires.
-        let timedOut = exitSignal.wait(timeout: .now() + 20) == .timedOut
+        var timedOut = exitSignal.wait(timeout: .now() + 20) == .timedOut
+        // Foundation.Process can publish its exit after the deadline even when
+        // the child has already exited normally. Do not report that notification
+        // race as a hook timeout.
+        if timedOut, !process.isRunning {
+            timedOut = false
+        }
         if timedOut {
             process.terminate()
             if exitSignal.wait(timeout: .now() + 1) == .timedOut {
                 kill(process.processIdentifier, SIGKILL)
                 _ = exitSignal.wait(timeout: .now() + 1)
+            }
+            if !process.isRunning, process.terminationReason == .exit {
+                timedOut = false
             }
         }
 
