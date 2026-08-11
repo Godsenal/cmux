@@ -25638,18 +25638,27 @@ struct CMUXCLI {
                     ? surfaceId
                     : (nonEmptyClaudeHookIdentifier(mappedSession?.surfaceId) ?? surfaceId)
                 let toolUseId = extractClaudeHookToolUseId(from: parsedInput.rawObject)
-                let registeredBlockingTool = try? sessionStore.recordBlockingToolNeedsInput(
-                    sessionId: sessionId,
-                    workspaceId: workspaceId,
-                    surfaceId: existingSurfaceId,
-                    cwd: parsedInput.cwd,
-                    transcriptPath: parsedInput.transcriptPath,
-                    agentPID: claudePid,
-                    toolUseId: toolUseId,
-                    rawObject: parsedInput.rawObject,
-                    lastSubtitle: waitingSubtitle,
-                    lastBody: needsInputBody
-                )
+                let registeredBlockingTool: ClaudeHookSessionStore.BlockingToolRegistration?
+                do {
+                    registeredBlockingTool = try sessionStore.recordBlockingToolNeedsInput(
+                        sessionId: sessionId,
+                        workspaceId: workspaceId,
+                        surfaceId: existingSurfaceId,
+                        cwd: parsedInput.cwd,
+                        transcriptPath: parsedInput.transcriptPath,
+                        agentPID: claudePid,
+                        toolUseId: toolUseId,
+                        rawObject: parsedInput.rawObject,
+                        lastSubtitle: waitingSubtitle,
+                        lastBody: needsInputBody
+                    )
+                } catch {
+                    registeredBlockingTool = nil
+                    telemetry.breadcrumb(
+                        "claude-hook.pre-tool-use.blocker-store-error",
+                        data: ["error": String(describing: error)]
+                    )
+                }
                 // In bypassPermissions (--dangerously-skip-permissions) mode no
                 // PermissionRequest or Notification hook follows. Acquire one
                 // request-keyed transient attention owner in the app; it shares
@@ -25662,7 +25671,8 @@ struct CMUXCLI {
                 // not retain permission_mode.
                 let permissionMode = (parsedInput.rawObject?["permission_mode"] as? String)
                     ?? (parsedInput.rawObject?["permissionMode"] as? String)
-                if permissionMode == "bypassPermissions" {
+                if permissionMode == "bypassPermissions",
+                   let registeredBlockingTool {
                     let title = String(
                         localized: "cli.claude-hook.notification.title",
                         defaultValue: "Claude Code"
@@ -25670,10 +25680,10 @@ struct CMUXCLI {
                     beginClaudeBlockingAttention(
                         client: client,
                         sessionId: sessionId,
-                        toolUseId: registeredBlockingTool?.requestId ?? toolUseId,
+                        toolUseId: registeredBlockingTool.requestId,
                         workspaceId: workspaceId,
                         surfaceId: existingSurfaceId,
-                        owner: registeredBlockingTool?.owner ?? mappedSession,
+                        owner: registeredBlockingTool.owner,
                         title: title,
                         subtitle: waitingSubtitle,
                         body: needsInputBody
