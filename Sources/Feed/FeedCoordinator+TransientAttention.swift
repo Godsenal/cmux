@@ -25,7 +25,7 @@ final class FeedTransientAttentionStore {
     }
 
     struct Entry: Sendable {
-        let target: FeedCoordinator.AttentionTarget
+        let target: FeedAttentionTarget
         let notificationCorrelationKey: String
         let owner: Owner
     }
@@ -84,7 +84,7 @@ final class FeedTransientAttentionStore {
 
     func removeValues(workspaceId: UUID) -> [Entry] {
         removeValues { _, entry in
-            entry.target.workspaceId == workspaceId
+            entry.target.ownerId == workspaceId
                 || entry.owner == .remoteWorkspace(workspaceId)
         }
     }
@@ -156,19 +156,22 @@ extension FeedCoordinator {
             claimedTabId: workspaceId,
             surfaceId: surfaceId
         ), let liveSurfaceId = liveTarget.surfaceId else { return false }
-        let liveWorkspaceId = liveTarget.tabId
+        let liveOwnerId = liveTarget.tabId
+        let tabManager = AppDelegate.shared?.tabManagerFor(tabId: liveOwnerId)
+            ?? AppDelegate.shared?.tabManagerFor(windowId: liveOwnerId)
 
         let event = WorkstreamEvent(
             sessionId: "\(source)-\(sessionId)",
             hookEventName: .askUserQuestion,
             source: source,
-            workspaceId: liveWorkspaceId.uuidString,
+            workspaceId: liveOwnerId.uuidString,
             surfaceId: liveSurfaceId.uuidString,
             requestId: requestId
         )
         guard let target = surfaceBlockingDecisionAttention(
             event: event,
-            resolved: (workspaceId: liveWorkspaceId, surfaceId: liveSurfaceId)
+            resolved: (ownerId: liveOwnerId, surfaceId: liveSurfaceId),
+            tabManager: tabManager
         ) else {
             return false
         }
@@ -193,7 +196,7 @@ extension FeedCoordinator {
             }
         }
         _ = AgentNotificationDelivery().enqueue(
-            workspaceID: liveWorkspaceId,
+            workspaceID: liveOwnerId,
             surfaceID: liveSurfaceId,
             title: title,
             subtitle: subtitle,

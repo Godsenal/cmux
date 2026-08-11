@@ -737,12 +737,20 @@ struct FeedCoordinatorTests {
     }
 
     @Test func lifecycleStatusKeyMatchesAgentReportedKey() {
-        // Claude reports its lifecycle under `claude_code`; reusing that key is
-        // what lets Claude's own resume hooks clear the needs-input badge.
+        // Claude reports its lifecycle under `claude_code`; normalize the Feed
+        // source the same way without mutating that agent-owned slot.
         #expect(FeedCoordinator.lifecycleStatusKey(forSource: "claude") == "claude_code")
         // Every other agent keys its status by its own source name.
         #expect(FeedCoordinator.lifecycleStatusKey(forSource: "codex") == "codex")
         #expect(FeedCoordinator.lifecycleStatusKey(forSource: "opencode") == "opencode")
+        #expect(
+            FeedCoordinator.attentionStatusKey(forSource: "claude")
+                == "cmux.feed.attention:claude_code"
+        )
+        #expect(
+            FeedCoordinator.attentionStatusKey(forSource: "codex")
+                == "cmux.feed.attention:codex"
+        )
     }
 
     @Test func workstreamPublicationCarriesAuthoritativeTargetAndError() throws {
@@ -865,9 +873,8 @@ struct FeedCoordinatorTests {
             startSeconds: 1,
             startMicroseconds: 0
         )
-        let target = FeedCoordinator.AttentionTarget(
-            workspaceId: UUID(),
-            panelId: UUID(),
+        let target = FeedAttentionTarget.panel(
+            id: UUID(),
             statusKey: "claude_code"
         )
         let firstKey = FeedTransientAttentionStore.Key(
@@ -896,7 +903,7 @@ struct FeedCoordinatorTests {
             store.entry(for: firstKey) == nil,
             "orphaned transient requests must not grow the Feed registry without a bound"
         )
-        #expect(store.removeValues(workspaceId: target.workspaceId).count == 256)
+        #expect(store.removeValues(ownerProcessIdentity: processIdentity).count == 256)
     }
 
     @Test @MainActor
@@ -904,14 +911,12 @@ struct FeedCoordinatorTests {
         let store = FeedTransientAttentionStore()
         let firstWorkspaceId = UUID()
         let secondWorkspaceId = UUID()
-        let firstTarget = FeedCoordinator.AttentionTarget(
-            workspaceId: firstWorkspaceId,
-            panelId: UUID(),
+        let firstTarget = FeedAttentionTarget.workspace(
+            id: firstWorkspaceId,
             statusKey: "claude_code"
         )
-        let secondTarget = FeedCoordinator.AttentionTarget(
-            workspaceId: secondWorkspaceId,
-            panelId: UUID(),
+        let secondTarget = FeedAttentionTarget.workspace(
+            id: secondWorkspaceId,
             statusKey: "claude_code"
         )
         let firstGenerationKey = FeedTransientAttentionStore.Key(
@@ -1011,9 +1016,8 @@ struct FeedCoordinatorTests {
         for (key, entry) in zip(keys, entries) {
             store.insert(
                 FeedTransientAttentionStore.Entry(
-                    target: FeedCoordinator.AttentionTarget(
-                        workspaceId: targetWorkspaceId,
-                        panelId: entry.0,
+                    target: FeedAttentionTarget.panel(
+                        id: entry.0,
                         statusKey: "claude_code"
                     ),
                     notificationCorrelationKey: entry.1,
@@ -1042,8 +1046,10 @@ struct FeedCoordinatorTests {
             store.removeValues(surfaceId: thirdPanelId)
                 .map(\.notificationCorrelationKey) == ["other-session"]
         )
+        #expect(store.removeValues(workspaceId: targetWorkspaceId).isEmpty)
+        #expect(store.entry(for: keys[3]) != nil)
         #expect(
-            store.removeValues(workspaceId: targetWorkspaceId)
+            store.removeValues(surfaceId: localPanelId)
                 .map(\.notificationCorrelationKey) == ["local"]
         )
     }
