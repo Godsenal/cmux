@@ -154,14 +154,26 @@ extension AgentNotificationRegressionTests {
         )
         TerminalMutationBus.shared.drainForTesting()
 
+        let attentionKey = FeedCoordinator.attentionStatusKey(forSource: "claude")
         #expect(began)
         #expect(
-            fixture.owningWorkspace.agentLifecycleStatesByPanelId[fixture.panelId]?["claude_code"]
+            fixture.owningWorkspace.agentLifecycleStatesByPanelId[fixture.panelId]?[attentionKey]
                 == .needsInput
         )
         #expect(
+            fixture.owningWorkspace.agentHibernationLifecycleState(
+                panelId: fixture.panelId,
+                fallback: nil
+            ) == .needsInput
+        )
+        #expect(
+            fixture.owningWorkspace.agentLifecycleStatesByPanelId[fixture.panelId]?["claude_code"]
+                == nil,
+            "transient attention must not overwrite the agent-owned lifecycle slot"
+        )
+        #expect(
             fixture.claimedWorkspace.agentLifecycleStatesByPanelId.values
-                .allSatisfy { $0["claude_code"] == nil },
+                .allSatisfy { $0[attentionKey] == nil && $0["claude_code"] == nil },
             "transient attention must not mutate the stale claimed workspace"
         )
         let recorded = fixture.store.notifications.filter { $0.title == "Claude Code" }
@@ -174,6 +186,10 @@ extension AgentNotificationRegressionTests {
             requestId: requestId
         ))
         TerminalMutationBus.shared.drainForTesting()
+        #expect(
+            fixture.owningWorkspace.agentLifecycleStatesByPanelId[fixture.panelId]?[attentionKey]
+                == nil
+        )
         #expect(fixture.store.notifications.allSatisfy { $0.title != "Claude Code" })
     }
 
