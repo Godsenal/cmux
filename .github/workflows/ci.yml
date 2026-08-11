@@ -1196,6 +1196,9 @@ jobs:
         if: ${{ matrix.shard == fromJSON(env.CMUX_APP_HOST_FOCUSED_REGRESSION_SHARD) }}
         run: |
           set -euo pipefail
+          # Runner annotations survive even when earlier xcodebuild output
+          # exhausts GitHub's retained text log for this long-lived job.
+          trap 'status=$?; echo "::error title=CLI no-socket regression failed::${BASH_COMMAND} (exit ${status})"; exit "$status"' ERR
 
           CLI_BIN="$(
             find "$CMUX_DERIVED_DATA_PATH" -path "*/Build/Products/Debug/cmux" -exec stat -f '%m %N' {} \; \
