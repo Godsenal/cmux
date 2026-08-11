@@ -2476,7 +2476,7 @@ final class SocketListenerAcceptPolicyTests: XCTestCase {
 
         XCTAssertEqual(
             entry.copyResumeCommand,
-            "cd /Users/tiffanysun/fun && /bin/sh -c "
+            "cd -- '/Users/tiffanysun/fun' 2>/dev/null || [ ! -d '/Users/tiffanysun/fun' ] && /bin/sh -c "
                 + shellQuotedForTest("\(AgentResumeArgv.claudeWrapperShellExecutableToken) --resume a22293b7-bcef-4707-8439-2f538c8517a4")
         )
     }
@@ -6402,7 +6402,12 @@ extension SessionPersistenceTests {
         ))
 
         XCTAssertFalse(input.contains("config set model.provider"))
-        XCTAssertTrue(input.contains("'--provider' '\\''anthropic'\\'''") || input.contains("'--provider' 'anthropic'"))
+        let outerArguments = TerminalStartupWorkingDirectoryPrefix.shellWordRanges(input).map(\.value)
+        let remoteCommand = try XCTUnwrap(outerArguments.last)
+        let remoteArguments = TerminalStartupWorkingDirectoryPrefix.shellWordRanges(remoteCommand).map(\.value)
+        XCTAssertTrue(zip(remoteArguments, remoteArguments.dropFirst()).contains { pair in
+            pair.0 == "--provider" && pair.1 == "anthropic"
+        })
     }
 
     private func makeSurfaceResumeApprovalStoreURL() throws -> URL {

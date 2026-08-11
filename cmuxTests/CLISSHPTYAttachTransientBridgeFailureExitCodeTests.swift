@@ -189,7 +189,7 @@ extension CLINotifyProcessIntegrationRegressionTests {
             "count=$(cat \"${CMUX_TEST_AUTH_ATTEMPTS}\" 2>/dev/null || printf 0)",
             "count=$((count + 1))",
             "printf '%s' \"$count\" > \"${CMUX_TEST_AUTH_ATTEMPTS}\"",
-            "if [ \"$count\" -eq 2 ]; then exit 255; fi",
+            "if [ \"$count\" -eq 2 ]; then printf '%s\\n' 'ssh: connect to host user@example.test port 22: Network is unreachable' >&2; exit 255; fi",
             "exit 0",
         ])
         try writeSSHPTYReconnectTestShell(at: fakeSleep, lines: [
