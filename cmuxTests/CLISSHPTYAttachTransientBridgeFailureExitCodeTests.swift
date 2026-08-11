@@ -162,6 +162,7 @@ extension CLINotifyProcessIntegrationRegressionTests {
         let authAttempts = root.appendingPathComponent("auth-attempts")
         let attachAttempts = root.appendingPathComponent("attach-attempts")
         let sleepAttempts = root.appendingPathComponent("sleep-attempts")
+        let controlPath = "/tmp/cmux-ssh-\(getuid())-\(UUID().uuidString.lowercased())"
         try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? fileManager.removeItem(at: root) }
 
@@ -179,6 +180,12 @@ extension CLINotifyProcessIntegrationRegressionTests {
         ])
         try writeSSHPTYReconnectTestShell(at: fakeSSH, lines: [
             "#!/bin/sh",
+            "previous_arg=",
+            "for arg in \"$@\"; do",
+            "  if [ \"$arg\" = '-G' ]; then printf 'controlpath %s\\n' \"${CMUX_TEST_CONTROL_PATH}\"; exit 0; fi",
+            "  if [ \"$previous_arg\" = '-O' ] && [ \"$arg\" = 'check' ]; then exit 255; fi",
+            "  previous_arg=\"$arg\"",
+            "done",
             "count=$(cat \"${CMUX_TEST_AUTH_ATTEMPTS}\" 2>/dev/null || printf 0)",
             "count=$((count + 1))",
             "printf '%s' \"$count\" > \"${CMUX_TEST_AUTH_ATTEMPTS}\"",
@@ -202,6 +209,7 @@ extension CLINotifyProcessIntegrationRegressionTests {
         environment["CMUX_TEST_AUTH_ATTEMPTS"] = authAttempts.path
         environment["CMUX_TEST_ATTACH_ATTEMPTS"] = attachAttempts.path
         environment["CMUX_TEST_SLEEP_ATTEMPTS"] = sleepAttempts.path
+        environment["CMUX_TEST_CONTROL_PATH"] = controlPath
         environment["CMUX_SSH_RECONNECT_DELAY_SECONDS"] = "2"
         environment["CMUX_SSH_RECONNECT_MAX_DELAY_SECONDS"] = "2"
 
