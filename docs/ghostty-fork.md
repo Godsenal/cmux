@@ -12,12 +12,28 @@ When we change the fork, update this document and the parent submodule SHA.
 
 ## Current fork changes
 
-The submodule pinned by this branch is `f76c132e5`, the fork-main merge of
-https://github.com/manaflow-ai/ghostty/pull/191. Its `533c27ae1` fix preserves
-saved cursors while formatter replay restores the active cursor after margins,
-origin mode, and tabstop state. The pin includes the prior fork changes below,
-including VT stream-boundary visibility at `9513174f2` and Hangul canonical
-font resolution at `3fbdd078d`.
+The submodule pinned by this branch is `a63a97868`, a topic commit based on the
+`f76c132e5` fork-main merge of https://github.com/manaflow-ai/ghostty/pull/191.
+It installs Fish's SSH wrapper when either SSH integration feature is enabled.
+The pin includes the prior fork changes below, including formatter cursor
+restoration at `533c27ae1`, VT stream-boundary visibility at `9513174f2`, and
+Hangul canonical font resolution at `3fbdd078d`.
+
+### Fish SSH wrapper feature disjunction
+
+- Branch: `cmux-9795-fish-ssh-wrapper`
+- Commit: `a63a97868` (fish: install SSH wrapper for either SSH feature)
+- File: `src/shell-integration/fish/vendor_conf.d/ghostty-shell-integration.fish`
+- Summary:
+  - Separates the non-empty `GHOSTTY_BIN` guard from the feature disjunction so
+    Fish installs the wrapper for `ssh-env`, `ssh-terminfo`, or both.
+  - Avoids Fish's sequential `and`/`or` evaluation accidentally requiring the
+    later `ssh-terminfo` check after `ssh-env` succeeds.
+- Conflict note:
+  - Preserve the explicit feature disjunction if upstream rewrites the Fish
+    integration. A single enabled SSH feature must still install the wrapper.
+- Artifact:
+  - https://github.com/manaflow-ai/ghostty/releases/tag/xcframework-a63a9786871c4f98387a02fd05a814e716499099-crashsubdir-cmux-crash-sentry-off-v1
 
 ### VT formatter cursor restoration after margins
 
