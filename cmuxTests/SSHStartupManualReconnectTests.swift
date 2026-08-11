@@ -911,7 +911,9 @@ struct SSHStartupManualReconnectTests {
                 try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
             }
 
-            let startupCommand = try generatedPersistentSSHForegroundAuthenticationStartupCommand()
+            let startupCommand = try generatedPersistentSSHForegroundAuthenticationStartupCommand(
+                sshExecutablePath: fakeSSH.path
+            )
             var environment = ProcessInfo.processInfo.environment
             environment["PATH"] = "\(root.path):\(environment["PATH"] ?? "/usr/bin:/bin")"
             environment["CMUX_BUNDLED_CLI_PATH"] = fakeCLI.path
