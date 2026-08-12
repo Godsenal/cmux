@@ -1349,62 +1349,9 @@ extension CLINotifyProcessIntegrationRegressionTests {
         let startupCommand = try XCTUnwrap(
             configureParams["terminal_startup_command"] as? String
         )
-        return try replacingSystemSSHExecutable(
-            in: startupCommand,
-            with: sshExecutablePath
-        )
-    }
-
-    private func replacingSystemSSHExecutable(
-        in startupCommand: String,
-        with executablePath: String
-    ) throws -> String {
-        let systemSSHPath = "/usr/bin/ssh"
-        var patchedCommand = startupCommand.replacingOccurrences(
-            of: systemSSHPath,
-            with: executablePath
-        )
-
-        let marker = "printf %s "
-        guard let markerRange = patchedCommand.range(of: marker) else {
-            XCTAssertNotEqual(
-                patchedCommand,
-                startupCommand,
-                "Expected the startup command to invoke the system SSH executable"
-            )
-            return patchedCommand
-        }
-        let encodedStart = markerRange.upperBound
-        let encodedEnd = patchedCommand[encodedStart...]
-            .firstIndex(where: \.isWhitespace) ?? patchedCommand.endIndex
-        let encodedRange = encodedStart..<encodedEnd
-        let encodedScript = String(patchedCommand[encodedRange])
-        let scriptData = try XCTUnwrap(
-            Data(base64Encoded: encodedScript),
-            "Expected a base64-encoded reusable startup script"
-        )
-        let script = try XCTUnwrap(
-            String(data: scriptData, encoding: .utf8),
-            "Expected a UTF-8 reusable startup script"
-        )
-        guard script.contains(systemSSHPath) else {
-            XCTAssertNotEqual(
-                patchedCommand,
-                startupCommand,
-                "Expected the startup command to invoke the system SSH executable"
-            )
-            return patchedCommand
-        }
-
-        let patchedScript = script.replacingOccurrences(
-            of: systemSSHPath,
-            with: executablePath
-        )
-        patchedCommand = patchedCommand.replacingOccurrences(
-            of: encodedScript,
-            with: Data(patchedScript.utf8).base64EncodedString()
-        )
-        return patchedCommand
+        return try SSHStartupCommandTestSupport(
+            sshExecutablePath: sshExecutablePath
+        ).rewriting(startupCommand)
     }
 
     private func generatedVMSSHInitialStartupCommand(
@@ -1431,12 +1378,9 @@ extension CLINotifyProcessIntegrationRegressionTests {
             }
 
             switch method {
-            case "vm.ssh_info", "vm.attach_info":
+            case "vm.ssh_info":
                 let params = payload["params"] as? [String: Any] ?? [:]
                 XCTAssertEqual(params["id"] as? String, vmID)
-                if method == "vm.attach_info" {
-                    XCTAssertEqual(params["require_daemon"] as? Bool, true)
-                }
                 return self.v2Response(
                     id: id,
                     ok: true,
@@ -1511,24 +1455,9 @@ extension CLINotifyProcessIntegrationRegressionTests {
         )
         let createParams = try XCTUnwrap(createRequest["params"] as? [String: Any])
         let startupCommand = try XCTUnwrap(createParams["initial_command"] as? String)
-        let scriptPath = startupCommand.trimmingCharacters(
-            in: CharacterSet(charactersIn: "'")
-        )
-        let scriptURL = URL(fileURLWithPath: scriptPath)
-        let script = try String(contentsOf: scriptURL, encoding: .utf8)
-        XCTAssertTrue(
-            script.contains("/usr/bin/ssh"),
-            "Expected the VM startup script to invoke the system SSH executable"
-        )
-        try script.replacingOccurrences(
-            of: "/usr/bin/ssh",
-            with: sshExecutablePath
-        ).write(to: scriptURL, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o700],
-            ofItemAtPath: scriptURL.path
-        )
-        return startupCommand
+        return try SSHStartupCommandTestSupport(
+            sshExecutablePath: sshExecutablePath
+        ).rewriting(startupCommand)
     }
 
     private func writeShellFile(at url: URL, lines: [String]) throws {

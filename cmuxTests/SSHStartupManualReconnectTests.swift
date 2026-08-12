@@ -118,6 +118,73 @@ struct SSHStartupManualReconnectTests {
         )
     }
 
+    @Test func terminalTeardownDisablesRemoteInputReportingModesBeforePrompt() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory
+            .appendingPathComponent("cmux-ssh-terminal-mode-reset-\(UUID().uuidString)", isDirectory: true)
+        let fakeCLI = root.appendingPathComponent("cmux")
+        let fakeSSH = root.appendingPathComponent("ssh")
+
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: root) }
+
+        try Self.writeShellFile(at: fakeCLI, lines: ["#!/bin/sh", "exit 0"])
+        try Self.writeShellFile(at: fakeSSH, lines: ["#!/bin/sh", "exit 7"])
+        for executable in [fakeCLI, fakeSSH] {
+            try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        }
+
+        let generatedStartupCommand = try Self.generatedVMSSHInitialStartupCommand(
+            sshExecutablePath: fakeSSH.path
+        )
+        let generatedStartupURL = URL(
+            fileURLWithPath: generatedStartupCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        defer { try? fileManager.removeItem(at: generatedStartupURL) }
+        let generatedStartupScript = try String(contentsOf: generatedStartupURL, encoding: .utf8)
+        try #require(generatedStartupScript.contains(fakeSSH.path))
+        let startupURL = root.appendingPathComponent("startup-with-fake-ssh.sh")
+        try generatedStartupScript.write(to: startupURL, atomically: true, encoding: .utf8)
+        try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: startupURL.path)
+        try fileManager.removeItem(at: generatedStartupURL)
+
+        var environment = ProcessInfo.processInfo.environment
+        environment["CMUX_BUNDLED_CLI_PATH"] = fakeCLI.path
+        environment["CMUX_SOCKET_PATH"] = "/tmp/cmux-debug-test.sock"
+        environment["CMUX_WORKSPACE_ID"] = "11111111-1111-1111-1111-111111111111"
+        environment["CMUX_SURFACE_ID"] = "22222222-2222-2222-2222-222222222222"
+        environment["CMUX_SSH_RECONNECT_LIMIT"] = "0"
+        let result = Self.runProcess(
+            executablePath: "/usr/bin/script",
+            arguments: ["-q", "-F", "/dev/null", "/bin/sh", startupURL.path],
+            environment: environment,
+            standardInput: "\n",
+            timeout: 5
+        )
+
+        let transcript = result.stdout + result.stderr
+        #expect(!result.timedOut, Comment(rawValue: transcript))
+        #expect(result.status == 7, Comment(rawValue: transcript))
+        let requiredResets = [
+            "\u{1B}[?1004l", // focus reporting
+            "\u{1B}[?1000l", // mouse reporting
+            "\u{1B}[?2004l", // bracketed paste
+            "\u{1B}[999<u", // Kitty keyboard stack
+            "\u{1B}[0;1=u", // Kitty keyboard flags
+            "\u{1B}[?2048l", // in-band resize reports
+            "\u{1B}[?2026l", // synchronized output
+        ]
+        let closePrompt = transcript.range(of: "press Enter to close this pane")
+        #expect(closePrompt != nil)
+        for reset in requiredResets {
+            let resetRange = transcript.range(of: reset)
+            #expect(resetRange != nil, Comment(rawValue: transcript))
+            if let resetRange, let closePrompt {
+                #expect(resetRange.lowerBound < closePrompt.lowerBound)
+            }
+        }
+    }
+
     @Test func directSignalTerminatesForegroundAuthenticationProcessTree() throws {
         let fileManager = FileManager.default
         let root = fileManager.temporaryDirectory
@@ -818,10 +885,9 @@ struct SSHStartupManualReconnectTests {
             }
 
             switch method {
-            case "vm.attach_info":
+            case "vm.ssh_info":
                 let params = payload["params"] as? [String: Any] ?? [:]
-                guard params["id"] as? String == vmID,
-                      params["require_daemon"] as? Bool == true else {
+                guard params["id"] as? String == vmID else {
                     return v2Response(id: id, ok: false, error: ["code": "invalid_params", "message": "unexpected attach params"])
                 }
                 return v2Response(
