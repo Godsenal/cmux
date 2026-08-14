@@ -1904,6 +1904,7 @@
           "agentIdleReminder": "Notify when an agent has been idle waiting for your input (about 60s after a turn ends). Suppressed while background work from the last turn is still pending, so a running build or watcher does not trigger a false waiting alert."
         },
         "links": {
+          "description": "Workspace Links panel capture settings.",
           "enabled": "Capture URLs emitted by terminals into each workspace Links panel.",
           "ignoreHosts": "Comma-separated hosts to skip during link ingest. Entries support host, host:port, and *.example.com wildcard suffixes.",
           "includeFilePaths": "Include file:// URLs in captured link history.",
