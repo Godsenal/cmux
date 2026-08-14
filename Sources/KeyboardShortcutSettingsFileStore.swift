@@ -380,6 +380,9 @@ final class CmuxSettingsFileStore {
         if let markdownSection = root["markdown"] as? [String: Any] {
             parseMarkdownSection(markdownSection, sourcePath: sourcePath, snapshot: &snapshot)
         }
+        if let linksSection = root["links"] as? [String: Any] {
+            parseLinksSection(linksSection, sourcePath: sourcePath, snapshot: &snapshot)
+        }
         if let fileEditorSection = root["fileEditor"] as? [String: Any] {
             parseFileEditorSection(fileEditorSection, sourcePath: sourcePath, snapshot: &snapshot)
         }
@@ -1553,6 +1556,7 @@ final class CmuxSettingsFileStore {
             var agentHibernationDidChange = false
             var rendererRealizationDidChange = false
             var paneChromeDidChange = false
+            var linksSettingsDidChange = false
             for change in changes {
                 if change.defaultsKey == TerminalScrollBarSettings.showScrollBarKey {
                     TerminalScrollBarSettings.notifyDidChange(notificationCenter: notificationCenter)
@@ -1581,6 +1585,9 @@ final class CmuxSettingsFileStore {
                     change.defaultsKey == RendererRealizationSettings.maxWarmRenderersKey {
                     rendererRealizationDidChange = true
                 }
+                if change.defaultsKey.hasPrefix("links.") {
+                    linksSettingsDidChange = true
+                }
 
                 if change.defaultsKey == AppCatalogSection().language.userDefaultsKey {
                     let rawValue = UserDefaults.standard.string(forKey: change.defaultsKey) ?? ""
@@ -1603,6 +1610,9 @@ final class CmuxSettingsFileStore {
             }
             if paneChromeDidChange {
                 PaneChromeSettings.notifyDidChange(notificationCenter: notificationCenter)
+            }
+            if linksSettingsDidChange {
+                TerminalLinkCaptureGate.refreshFromUserDefaults()
             }
         }
         if Thread.isMainThread {
