@@ -186,8 +186,13 @@ struct CLICodexHookTimeoutRegressionTests {
             )
         }
         #expect(installedHooks.contains { $0.command == userScript.path })
-        #expect(!FileManager.default.fileExists(atPath: legacyStopScript.path))
-        #expect(!FileManager.default.fileExists(atPath: staleHashedScript.path))
+        // Wrapper injection is on Codex's launch path. It must not collect or
+        // delete stale generated files just to reconcile the persistent
+        // config, so old cmux-owned files remain untouched here. They are
+        // eligible for the bounded collector only during an explicit
+        // `hooks codex install`.
+        #expect(FileManager.default.fileExists(atPath: legacyStopScript.path))
+        #expect(FileManager.default.fileExists(atPath: staleHashedScript.path))
         #expect(FileManager.default.fileExists(atPath: userScript.path))
     }
 

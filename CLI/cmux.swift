@@ -30097,7 +30097,6 @@ export default CMUXSessionRestore;
         guard let def = Self.agentDef(named: "codex") else { return false }
         let hooksURL = URL(fileURLWithPath: def.resolvedConfigDir(), isDirectory: true)
             .appendingPathComponent(def.configFile, isDirectory: false)
-        let hooksBeforeReconciliation = Self.codexHookFileFingerprint(at: hooksURL)
         try? installAgentHooks(def, automaticReconciliation: true)
 
         guard let data = try? Data(contentsOf: hooksURL),
@@ -30105,31 +30104,9 @@ export default CMUXSessionRestore;
               let hooks = root["hooks"] as? [String: Any] else {
             return false
         }
-        // Cleanup is tied to an actual automatic reconciliation write, not to
-        // every wrapper launch. This keeps the normal one-shot path free of
-        // directory scans while still retiring legacy generated files when a
-        // persistent channel is repaired.
-        if hooksBeforeReconciliation != Self.codexHookFileFingerprint(at: hooksURL) {
-            Self.garbageCollectCodexHookScripts(
-                retaining: Self.currentCodexWrapperHookScriptFilenames(for: def)
-                    .union(Self.installedCodexHookScriptFilenames(for: def))
-            )
-        }
         return hooks.values.contains {
             Self.jsonHookValueContainsCmuxOwnedCommand($0, for: def)
         }
-    }
-
-    /// A tiny metadata fingerprint avoids rereading a potentially large user
-    /// hooks file merely to decide whether reconciliation wrote it.
-    private static func codexHookFileFingerprint(at url: URL) -> String? {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else {
-            return nil
-        }
-        let inode = (attributes[.systemFileNumber] as? NSNumber)?.uint64Value ?? 0
-        let size = (attributes[.size] as? NSNumber)?.uint64Value ?? 0
-        let modification = (attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-        return "\(inode):\(size):\(modification)"
     }
 
     private func pruneLegacyGrokHookFileIfNeeded(
