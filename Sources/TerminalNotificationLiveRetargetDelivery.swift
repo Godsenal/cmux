@@ -69,6 +69,7 @@ extension TerminalNotificationStore {
     /// the workspace that currently owns it (issues #7939/#5781) instead of
     /// being dropped on a stale workspace claim; only a gone target (closed
     /// surface/workspace) skips.
+    @discardableResult
     func deliverQueuedNotification(
         claimedTabId: UUID,
         surfaceId: UUID?,
@@ -78,7 +79,7 @@ extension TerminalNotificationStore {
         replyShape: TerminalNotificationReplyShape,
         correlationKey: String? = nil,
         notificationGeneration: UInt64
-    ) {
+    ) -> Bool {
         guard let target = AppDelegate.shared?.agentNotificationDeliveryTarget(
             claimedTabId: claimedTabId,
             surfaceId: surfaceId
@@ -88,7 +89,7 @@ extension TerminalNotificationStore {
                 "notification.queue.deliver.skip workspace=\(claimedTabId.uuidString.prefix(8)) surface=\(surfaceId?.uuidString.prefix(8) ?? "nil") reason=targetMissing titleLen=\(title.count) subtitleLen=\(subtitle.count) bodyLen=\(body.count)"
             )
 #endif
-            return
+            return false
         }
 #if DEBUG
         cmuxDebugLog(
@@ -106,6 +107,7 @@ extension TerminalNotificationStore {
             correlationKey: correlationKey,
             notificationGeneration: notificationGeneration
         )
+        return true
     }
 
     /// Re-resolves canonical surface identity at the final apply boundary,

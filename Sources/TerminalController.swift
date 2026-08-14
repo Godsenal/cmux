@@ -11450,7 +11450,7 @@ class TerminalController {
           notify_target <workspace_id> <surface_id> <payload> - Notify by workspace+surface
           notify_target_async <workspace_uuid> <surface_uuid> <payload> - Queue notification by workspace+surface
           list_notifications              - List all notifications
-          clear_notifications [--tab=X] [--panel=ID] - Clear notifications (all, per-tab, or per-panel)
+          clear_notifications [--tab=X] [--panel=ID] [--approval-id=ID|--approval-scope=SCOPE] - Clear notifications (all, per-tab, per-panel, or one correlated approval)
           set_app_focus <active|inactive|clear> - Override app focus state
           simulate_app_active             - Trigger app active handler
           set_status <key> <value> [--icon=X] [--color=#hex] [--url=X] [--priority=N] [--format=plain|markdown] [--tab=X] - Set a status entry
@@ -12783,13 +12783,13 @@ class TerminalController {
         let parsed = parseOptions(trimmed)
         guard let tabOption = parsed.options["tab"],
               !tabOption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return "ERROR: Usage: clear_notifications [--tab=X] [--panel=ID]"
+            return "ERROR: Usage: clear_notifications [--tab=X] [--panel=ID] [--approval-id=ID|--approval-scope=SCOPE]"
         }
         let targetResolution = parseSidebarMutationTabTarget(options: parsed.options)
         guard let target = targetResolution.target else {
             return targetResolution.error ?? "ERROR: Tab not found"
         }
-        let usage = "clear_notifications [--tab=X] [--panel=ID]"
+        let usage = "clear_notifications [--tab=X] [--panel=ID] [--approval-id=ID|--approval-scope=SCOPE]"
         let panelResolution = parseOptionalPanelIdOption(options: parsed.options, usage: usage)
         if let error = panelResolution.error {
             return error

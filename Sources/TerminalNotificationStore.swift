@@ -1468,10 +1468,19 @@ final class TerminalNotificationStore: ObservableObject {
     ) {
         var updated = notifications
         var idsToClear: [String] = []
+        var supersededApprovalKeys: [String] = []
         updated.removeAll { existing in
             guard existing.tabId == notification.tabId, existing.surfaceId == notification.surfaceId else { return false }
             idsToClear.append(existing.id.uuidString)
+            if let correlationKey = existing.correlationKey,
+               AgentApprovalNotificationCoordinator.isApprovalCorrelationKey(correlationKey) {
+                supersededApprovalKeys.append(correlationKey)
+            }
             return true
+        }
+
+        for correlationKey in supersededApprovalKeys {
+            TerminalMutationBus.shared.dismissAgentApproval(correlationKey: correlationKey)
         }
 
         if let existingIndicatorSurfaceId = focusedReadIndicatorByTabId[notification.tabId],
@@ -1650,10 +1659,15 @@ final class TerminalNotificationStore: ObservableObject {
         guard !ids.isEmpty else { return marked }
         var updated = notifications
         var activeIDs: [String] = []
+        var retiredApprovalKeys: [String] = []
         var drainedSuperseded: [String] = []
         for index in updated.indices where ids.contains(updated[index].id) && !updated[index].isRead {
             updated[index].isRead = true
             activeIDs.append(updated[index].id.uuidString)
+            if let correlationKey = updated[index].correlationKey,
+               AgentApprovalNotificationCoordinator.isApprovalCorrelationKey(correlationKey) {
+                retiredApprovalKeys.append(correlationKey)
+            }
             drainedSuperseded.append(contentsOf: supersededPhoneDismissBuffer.flush(
                 forKey: SupersededPhoneDismissBuffer.key(
                     tabId: updated[index].tabId,
@@ -1662,6 +1676,9 @@ final class TerminalNotificationStore: ObservableObject {
             ))
         }
         if !activeIDs.isEmpty {
+            for correlationKey in retiredApprovalKeys {
+                TerminalMutationBus.shared.dismissAgentApproval(correlationKey: correlationKey)
+            }
             notifications = updated
             removeDeliveredNotifications(withIdentifiers: activeIDs)
             emitNotificationsDismissed(
@@ -1714,10 +1731,15 @@ final class TerminalNotificationStore: ObservableObject {
         notificationFeedHistory.markRead(inWorkspace: tabId)
         var updated = notifications
         var idsToClear: [String] = []
+        var retiredApprovalKeys: [String] = []
         for index in updated.indices {
             if updated[index].tabId == tabId && !updated[index].isRead {
                 updated[index].isRead = true
                 idsToClear.append(updated[index].id.uuidString)
+                if let correlationKey = updated[index].correlationKey,
+                   AgentApprovalNotificationCoordinator.isApprovalCorrelationKey(correlationKey) {
+                    retiredApprovalKeys.append(correlationKey)
+                }
             }
         }
         if !idsToClear.isEmpty {
@@ -1730,6 +1752,9 @@ final class TerminalNotificationStore: ObservableObject {
         setPanelDerivedWorkspaceUnread(false, forTabId: tabId)
         setWorkspaceRestoredUnread(false, forTabId: tabId)
         if !idsToClear.isEmpty {
+            for correlationKey in retiredApprovalKeys {
+                TerminalMutationBus.shared.dismissAgentApproval(correlationKey: correlationKey)
+            }
             removeDeliveredNotifications(withIdentifiers: idsToClear)
             emitNotificationsDismissed(
                 ids: idsToClear,
@@ -1743,6 +1768,7 @@ final class TerminalNotificationStore: ObservableObject {
         notificationFeedHistory.markRead(inWorkspace: tabId, surfaceId: surfaceId)
         var updated = notifications
         var idsToClear: [String] = []
+        var retiredApprovalKeys: [String] = []
         var supersededDrained = supersededPhoneDismissBuffer.flush(
             forKey: SupersededPhoneDismissBuffer.key(tabId: tabId, surfaceId: surfaceId)
         )
@@ -1751,6 +1777,10 @@ final class TerminalNotificationStore: ObservableObject {
                !updated[index].isRead {
                 updated[index].isRead = true
                 idsToClear.append(updated[index].id.uuidString)
+                if let correlationKey = updated[index].correlationKey,
+                   AgentApprovalNotificationCoordinator.isApprovalCorrelationKey(correlationKey) {
+                    retiredApprovalKeys.append(correlationKey)
+                }
                 supersededDrained.append(contentsOf: supersededPhoneDismissBuffer.flush(
                     forKey: SupersededPhoneDismissBuffer.key(
                         tabId: updated[index].tabId,
@@ -1780,6 +1810,9 @@ final class TerminalNotificationStore: ObservableObject {
             setWorkspaceRestoredUnread(false, forTabId: tabId)
         }
         if !idsToClear.isEmpty {
+            for correlationKey in retiredApprovalKeys {
+                TerminalMutationBus.shared.dismissAgentApproval(correlationKey: correlationKey)
+            }
             removeDeliveredNotifications(withIdentifiers: idsToClear)
             removePendingNotificationRequests(withIdentifiers: idsToClear)
             emitNotificationsDismissed(ids: idsToClear, drainedSuperseded: supersededDrained)
@@ -1886,12 +1919,17 @@ final class TerminalNotificationStore: ObservableObject {
         notificationFeedHistory.markAllRead()
         var updated = notifications
         var idsToClear: [String] = []
+        var retiredApprovalKeys: [String] = []
         var tabIdsToClearPanelUnread = panelDerivedUnreadWorkspaceIds
         for index in updated.indices {
             if !updated[index].isRead {
                 tabIdsToClearPanelUnread.insert(updated[index].tabId)
                 updated[index].isRead = true
                 idsToClear.append(updated[index].id.uuidString)
+                if let correlationKey = updated[index].correlationKey,
+                   AgentApprovalNotificationCoordinator.isApprovalCorrelationKey(correlationKey) {
+                    retiredApprovalKeys.append(correlationKey)
+                }
             }
         }
         if !idsToClear.isEmpty {
@@ -1903,6 +1941,9 @@ final class TerminalNotificationStore: ObservableObject {
         clearPanelDerivedWorkspaceUnread()
         clearWorkspaceRestoredUnread()
         if !idsToClear.isEmpty {
+            for correlationKey in retiredApprovalKeys {
+                TerminalMutationBus.shared.dismissAgentApproval(correlationKey: correlationKey)
+            }
             removeDeliveredNotifications(withIdentifiers: idsToClear)
             removePendingNotificationRequests(withIdentifiers: idsToClear)
             emitNotificationsDismissed(
@@ -1918,6 +1959,10 @@ final class TerminalNotificationStore: ObservableObject {
         let originalCount = updated.count
         updated.removeAll { $0.id == id }
         guard updated.count != originalCount else { return }
+        if let correlationKey = removed?.correlationKey,
+           AgentApprovalNotificationCoordinator.isApprovalCorrelationKey(correlationKey) {
+            TerminalMutationBus.shared.dismissAgentApproval(correlationKey: correlationKey)
+        }
         notifications = updated
         notificationFeedHistory.markRead(ids: [id])
         if let removed {
@@ -1937,10 +1982,37 @@ final class TerminalNotificationStore: ObservableObject {
 
     func clearNotifications(forTabId tabId: UUID, correlationKey: String) {
         inFlightPolicyRequests.discard(forTabId: tabId, correlationKey: correlationKey)
-        let ids = notifications.compactMap {
-            $0.tabId == tabId && $0.correlationKey == correlationKey ? $0.id : nil
+        let matching = notifications.filter {
+            $0.tabId == tabId && $0.correlationKey == correlationKey
         }
-        ids.forEach(remove)
+        let ids = matching.map(\.id)
+        if AgentApprovalNotificationCoordinator.isApprovalCorrelationKey(correlationKey) {
+            TerminalMutationBus.shared.dismissAgentApproval(correlationKey: correlationKey)
+        }
+        guard !matching.isEmpty else {
+            removePendingNotificationRequests(withIdentifiers: ids.map(\.uuidString))
+            return
+        }
+        let removedIDs = Set(ids)
+        var updated = notifications
+        updated.removeAll { removedIDs.contains($0.id) }
+        notifications = updated
+        notificationFeedHistory.markRead(ids: removedIDs)
+        var supersededDrained: [String] = []
+        for removed in matching {
+            clearFocusedReadIndicator(forTabId: removed.tabId, surfaceId: removed.surfaceId)
+            supersededDrained.append(contentsOf: supersededPhoneDismissBuffer.flush(
+                forKey: SupersededPhoneDismissBuffer.key(
+                    tabId: removed.tabId,
+                    surfaceId: removed.surfaceId
+                )
+            ))
+        }
+        removeDeliveredNotifications(withIdentifiers: ids.map(\.uuidString))
+        emitNotificationsDismissed(
+            ids: ids.map(\.uuidString),
+            drainedSuperseded: supersededDrained
+        )
         removePendingNotificationRequests(withIdentifiers: ids.map(\.uuidString))
     }
 
@@ -1952,7 +2024,13 @@ final class TerminalNotificationStore: ObservableObject {
             .map { $0.id.uuidString }
         var usedNotificationIds = Set(notifications.filter { $0.tabId != tabId }.map(\.id))
         let restoredForTab = restoredNotifications
-            .filter { $0.tabId == tabId }
+            .filter {
+                $0.tabId == tabId
+                    // Approval coordinator state is deliberately ephemeral;
+                    // restoring its banner without its in-memory candidates
+                    // would create an orphan that no later hook can settle.
+                    && !AgentApprovalNotificationCoordinator.isApprovalCorrelationKey($0.correlationKey)
+            }
             .sorted(by: Self.notificationSortPrecedes)
             .map { Self.notificationWithUniqueId($0, usedIds: &usedNotificationIds) }
         let keptNotifications = notifications.filter { $0.tabId != tabId }
@@ -2020,6 +2098,14 @@ final class TerminalNotificationStore: ObservableObject {
             !restoredUnreadWorkspaceIds.isEmpty else { return }
         let tabIdsToClearPanelUnread = panelDerivedUnreadWorkspaceIds.union(notifications.map(\.tabId))
         let ids = notifications.map { $0.id.uuidString }
+        let approvalKeys = notifications.compactMap { notification -> String? in
+            guard let key = notification.correlationKey,
+                  AgentApprovalNotificationCoordinator.isApprovalCorrelationKey(key) else { return nil }
+            return key
+        }
+        for key in approvalKeys {
+            TerminalMutationBus.shared.dismissAgentApproval(correlationKey: key)
+        }
         notificationFeedHistory.markRead(
             ids: Set(ids.compactMap { UUID(uuidString: $0) })
         )
@@ -2101,6 +2187,11 @@ final class TerminalNotificationStore: ObservableObject {
 
     func rebindSurfaceNotifications(fromTabId sourceTabId: UUID, toTabId destinationTabId: UUID, surfaceId: UUID) {
         guard sourceTabId != destinationTabId else { return }
+        TerminalMutationBus.shared.rebindAgentApproval(
+            surfaceID: surfaceId,
+            fromWorkspaceID: sourceTabId,
+            toWorkspaceID: destinationTabId
+        )
         inFlightPolicyRequests.rebindSurface(fromTabId: sourceTabId, toTabId: destinationTabId, surfaceId: surfaceId)
         notificationFeedHistory.rebindSurface(
             fromTabId: sourceTabId,
