@@ -53,3 +53,9 @@ upstream(manaflow-ai/cmux)은 하루 100–270 커밋, 주 ~1.5 릴리즈로 움
 - `cmux-tui/`(레포의 2번째 활발한 디렉토리)는 **별도의 Rust TUI 멀티플렉서**다. SDK/플러그인
   시스템(`cmux-tui/spec/*.md`)은 전부 TUI용 — Swift 맥 앱에는 일반 플러그인 API가 없다.
 - 포크를 배포하면 GPL-3 소스 공개 의무 발생. 개인 사용은 무관.
+
+## 현재 캐리 중인 패치
+
+- `Packages/macOS/CmuxSimulator`를 upstream `8e03abb930`("Restore Xcode 16 simulator package
+  compatibility", #10009) 버전으로 교체. 로컬 Xcode 16.4에서 v0.64.22가 sendability 에러로 안 빌드됨.
+  **exit**: 8e03abb930을 포함한 릴리즈 태그로 sync하면 이 diff는 자연 소멸된다.
