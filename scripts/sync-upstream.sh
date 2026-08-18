@@ -29,7 +29,9 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
 fi
 
 echo "→ Fetching upstream (branches + tags)..."
-git fetch upstream main --tags
+# --force: upstream moves floating tags like `nightly`; without it the whole
+# fetch fails with "would clobber existing tag" and the sync never runs.
+git fetch upstream main --tags --force
 
 echo "→ Fast-forwarding local main to upstream/main..."
 git checkout -q main
